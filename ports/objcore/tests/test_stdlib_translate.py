@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Try translating every micropython-lib python-stdlib .py file to objcore C."""
+"""Try translating every micropython-lib python-stdlib .py file via tools/py2c.py."""
 
 from __future__ import annotations
 
@@ -7,14 +7,13 @@ import sys
 import unittest
 from pathlib import Path
 
-# Import from ports/objcore/
-_OBJCORE = Path(__file__).resolve().parents[1]
-if str(_OBJCORE) not in sys.path:
-    sys.path.insert(0, str(_OBJCORE))
+_MICROPYTHON_TOP = Path(__file__).resolve().parents[3]
+_TOOLS = _MICROPYTHON_TOP / "tools"
+if str(_TOOLS) not in sys.path:
+    sys.path.insert(0, str(_TOOLS))
 
-from ast2objcore import try_translate_file  # noqa: E402
+from py2c import DEFAULT_STDLIB, transpile_file  # noqa: E402
 from translate_stdlib import (  # noqa: E402
-    DEFAULT_STDLIB,
     iter_stdlib_py_files,
     relative_slug,
     translate_stdlib,
@@ -38,61 +37,61 @@ class TestStdlibTranslate(unittest.TestCase):
         self.assertGreater(len(_STDLIB_FILES), 0)
 
     def test_translate_summary(self) -> None:
-        """Single failure listing every file that does not transpile."""
+        """Every stdlib file must transpile without stubs."""
         failures: list[tuple[str, str]] = []
-        successes: list[str] = []
         for py_path in _STDLIB_FILES:
             rel = py_path.relative_to(DEFAULT_STDLIB).as_posix()
-            _code, err = try_translate_file(py_path)
-            if err is None:
-                successes.append(rel)
-            else:
-                failures.append((rel, err))
+            out, err = transpile_file(str(py_path), "/tmp", str(DEFAULT_STDLIB))
+            if out is None:
+                failures.append((rel, err or "unknown error"))
+                continue
+            code = Path(out).read_text(encoding="utf-8")
+            if "unsupported */" in code or "unsupported */" in code.lower():
+                failures.append((rel, "output contains unsupported stub"))
 
         if failures:
             width = max(len(name) for name, _ in failures)
-            lines = [f"{len(failures)} of {len(_STDLIB_FILES)} stdlib file(s) failed to translate:"]
+            lines = [f"{len(failures)} of {len(_STDLIB_FILES)} stdlib file(s) failed:"]
             for name, err in failures:
                 lines.append(f"  {name.ljust(width)}  {err}")
-            if successes:
-                lines.append("")
-                lines.append(f"{len(successes)} succeeded:")
-                for name in successes:
-                    lines.append(f"  {name}")
             self.fail("\n".join(lines))
 
     def test_batch_translate_writes_report(self) -> None:
-        out = _OBJCORE / "build" / "stdlib_test_out"
-        report = _OBJCORE / "build" / "stdlib_test_report.txt"
+        out = Path(__file__).resolve().parents[1] / "build" / "stdlib_test_out"
+        report = Path(__file__).resolve().parents[1] / "build" / "stdlib_test_report.txt"
         ok, failed = translate_stdlib(DEFAULT_STDLIB, out, report)
         self.assertTrue(report.is_file())
         text = report.read_text(encoding="utf-8")
-        self.assertIn("FAIL:", text)
-        self.assertEqual(len(ok) + len(failed), len(_STDLIB_FILES))
+        self.assertIn("FAIL: 0", text.replace("FAIL:   0", "FAIL: 0"))
+        self.assertEqual(len(ok), len(_STDLIB_FILES))
+        self.assertEqual(failed, [])
         for rel in ok:
             c_path = out / f"{relative_slug(DEFAULT_STDLIB, DEFAULT_STDLIB / rel)}.c"
             self.assertTrue(c_path.is_file(), f"missing output for {rel}")
-            self.assertIn("void script_run(void)", c_path.read_text(encoding="utf-8"))
+            body = c_path.read_text(encoding="utf-8")
+            self.assertIn("#include \"shivyc_rt.h\"", body)
+            self.assertIn("#include \"mp_stdlib_bridge.h\"", body)
+            self.assertNotIn("unsupported */", body)
 
 
 def _make_file_test(py_path: Path):
     rel = py_path.relative_to(DEFAULT_STDLIB).as_posix()
 
     def test(self: TestStdlibTranslate) -> None:
-        code, err = try_translate_file(py_path)
-        if err is not None:
-            self.fail(err)
-        self.assertIn("void script_run(void)", code or "")
+        out, err = transpile_file(str(py_path), "/tmp", str(DEFAULT_STDLIB))
+        if out is None:
+            self.fail(err or "transpile failed")
+        code = Path(out).read_text(encoding="utf-8")
+        self.assertNotIn("unsupported */", code)
 
-    test.__doc__ = f"Transpile python-stdlib/{rel} to objcore C."
+    test.__doc__ = f"Transpile python-stdlib/{rel} via py2c."
     test.__name__ = _safe_test_name(rel)
     return test
 
 
 if _STDLIB_FILES:
     for _py in _STDLIB_FILES:
-        _rel = _py.relative_to(DEFAULT_STDLIB).as_posix()
-        setattr(TestStdlibTranslate, _safe_test_name(_rel), _make_file_test(_py))
+        setattr(TestStdlibTranslate, _safe_test_name(_py.relative_to(DEFAULT_STDLIB).as_posix()), _make_file_test(_py))
 
 
 if __name__ == "__main__":

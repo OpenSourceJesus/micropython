@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch-translate micropython-lib python-stdlib .py files to objcore C."""
+"""Batch-translate micropython-lib python-stdlib .py files via tools/py2c.py."""
 
 from __future__ import annotations
 
@@ -7,9 +7,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from ast2objcore import try_translate_file
-
 MICROPYTHON_TOP = Path(__file__).resolve().parents[2]
+PY2C = MICROPYTHON_TOP / "tools" / "py2c.py"
 DEFAULT_STDLIB = MICROPYTHON_TOP / "lib" / "micropython-lib" / "python-stdlib"
 DEFAULT_OUT = Path(__file__).resolve().parent / "stdlib_translated"
 DEFAULT_REPORT = Path(__file__).resolve().parent / "stdlib_translate_report.txt"
@@ -29,43 +28,11 @@ def translate_stdlib(
     out_dir: Path,
     report_path: Path,
 ) -> tuple[list[str], list[tuple[str, str]]]:
-    ok: list[str] = []
-    failed: list[tuple[str, str]] = []
+    if str(MICROPYTHON_TOP) not in sys.path:
+        sys.path.insert(0, str(MICROPYTHON_TOP / "tools"))
+    from py2c import translate_stdlib as py2c_translate_stdlib  # noqa: WPS433
 
-    for py_path in iter_stdlib_py_files(stdlib_dir):
-        rel = py_path.relative_to(stdlib_dir).as_posix()
-        code, err = try_translate_file(py_path)
-        if err is not None:
-            failed.append((rel, err))
-            continue
-        assert code is not None
-        out_path = out_dir / f"{relative_slug(stdlib_dir, py_path)}.c"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(code, encoding="utf-8")
-        ok.append(rel)
-
-    lines = [
-        "micropython-lib python-stdlib → objcore C translation report",
-        f"stdlib: {stdlib_dir}",
-        f"output: {out_dir}",
-        "",
-        f"OK:   {len(ok)}",
-        f"FAIL: {len(failed)}",
-        "",
-    ]
-    if ok:
-        lines.append("=== translated ===")
-        lines.extend(f"  {name}" for name in ok)
-        lines.append("")
-    if failed:
-        lines.append("=== failures ===")
-        for name, err in failed:
-            lines.append(f"  {name}")
-            lines.append(f"    {err}")
-        lines.append("")
-
-    report_path.write_text("\n".join(lines), encoding="utf-8")
-    return ok, failed
+    return py2c_translate_stdlib(stdlib_dir, out_dir, report_path)
 
 
 def main(argv: list[str] | None = None) -> int:

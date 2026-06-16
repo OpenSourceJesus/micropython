@@ -190,6 +190,29 @@ class TestUnsupported(unittest.TestCase):
         expect_error("import os", "import statements")
 
 
+class TestFunctions(unittest.TestCase):
+    def test_simple_function_return(self) -> None:
+        src = """
+def add(a, b):
+    return a + b
+"""
+        code = translate(src, permissive=True)
+        assert "static mp_obj_t fn_add" in code
+        assert "return" in code
+        assert "MP_BINARY_OP_ADD" in code
+
+    def test_function_raise_valueerror(self) -> None:
+        src = """
+def check(x):
+    if x < 0:
+        raise ValueError("bad")
+    return x
+"""
+        code = translate(src, permissive=True)
+        assert "mp_raise_ValueError" in code
+        assert "MP_BINARY_OP_LESS" in code
+
+
 class TestIntegrationSnippet(unittest.TestCase):
     def test_hello_world(self) -> None:
         expect_ok('print("hello world")', 'mp_obj_new_str("hello world", 11)')

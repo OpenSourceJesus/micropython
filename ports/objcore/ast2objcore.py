@@ -61,6 +61,8 @@ CMPOPS: dict[type, str] = {
     ast.LtE: "MP_BINARY_OP_LESS_EQUAL",
     ast.Gt: "MP_BINARY_OP_MORE",
     ast.GtE: "MP_BINARY_OP_MORE_EQUAL",
+    ast.Is: "MP_BINARY_OP_IS",
+    ast.IsNot: "MP_BINARY_OP_IS_NOT",
 }
 
 UNARYOPS: dict[type, str] = {
@@ -133,6 +135,9 @@ class Emitter(ast.NodeVisitor):
         self._vars: dict[str, str] = {}
         self._refs = RefGraph()
         self._loop_stack: list[tuple[str, str]] = []  # (break_label, continue_label)
+        self._funcs: dict[str, ast.FunctionDef] = {}
+        self._func_defs: list[tuple[str, list[str], list[str]]] = []  # cname, params, body
+        self._in_function = False
 
     def emit(self, line: str = "") -> None:
         self.lines.append(line)
@@ -147,7 +152,13 @@ class Emitter(ast.NodeVisitor):
 
     def visit_Module(self, node: ast.Module) -> None:
         for stmt in node.body:
-            self._visit_stmt(stmt)
+            if isinstance(stmt, ast.FunctionDef):
+                self._funcs[stmt.name] = stmt
+        for stmt in node.body:
+            if isinstance(stmt, ast.FunctionDef):
+                self.visit_FunctionDef(stmt)
+            else:
+                self._visit_stmt(stmt)
 
     def _visit_stmt(self, stmt: ast.stmt) -> None:
         try:
@@ -232,9 +243,53 @@ class Emitter(ast.NodeVisitor):
         self.emit(f"goto {self._loop_stack[-1][1]};")
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        cname = self._func_cname(node.name)
+        params = [f"mp_obj_t mp_arg_{a.arg}" for a in node.args.args]
+        saved_lines = self.lines
+        saved_vars = dict(self._vars)
+        saved_refs = self._refs
+        saved_in_function = self._in_function
+        self.lines = []
+        self._vars = {a.arg: f"mp_arg_{a.arg}" for a in node.args.args}
+        self._refs = RefGraph()
+        self._in_function = True
+        for stmt in node.body:
+            self._visit_stmt(stmt)
+        if not body_ends_with_return(self.lines):
+            self.emit("return mp_const_none;")
+        body = self.lines
+        self._func_defs.append((cname, params, body))
+        self.lines = saved_lines
+        self._vars = saved_vars
+        self._refs = saved_refs
+        self._in_function = saved_in_function
+
+    def _func_cname(self, name: str) -> str:
+        return f"fn_{name}"
+
+    def visit_Return(self, node: ast.Return) -> None:
+        if node.value is None:
+            self.emit("return mp_const_none;")
+            return
+        val = self._emit_expr(node.value)
+        self.emit(f"return {val};")
+
+    def visit_Raise(self, node: ast.Raise) -> None:
+        if node.exc is None:
+            if self.permissive:
+                return
+            raise TranslateError("bare raise is not supported", node.lineno)
+        if isinstance(node.exc, ast.Call) and isinstance(node.exc.func, ast.Name):
+            exc = node.exc.func.id
+            if exc == "ValueError" and len(node.exc.args) == 1:
+                msg_node = node.exc.args[0]
+                if isinstance(msg_node, ast.Constant) and isinstance(msg_node.value, str):
+                    data, _length = c_string_literal(msg_node.value)
+                    self.emit(f"mp_raise_ValueError(MP_ERROR_TEXT({data}));")
+                    return
         if self.permissive:
             return
-        self._unsupported_stmt(node)
+        raise TranslateError("raise is not supported", node.lineno)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         if self.permissive:
@@ -366,6 +421,12 @@ class Emitter(ast.NodeVisitor):
 
     def _emit_assign(self, target: ast.expr, value: ast.expr, lineno: int | None) -> None:
         if isinstance(target, ast.Name):
+            if (
+                self.permissive
+                and isinstance(value, ast.Name)
+                and value.id in self._funcs
+            ):
+                return
             name = target.id
             if isinstance(value, (ast.List, ast.Dict, ast.Tuple)):
                 cval = self._emit_container(value, owner_name=name, lineno=lineno)
@@ -656,12 +717,25 @@ class Emitter(ast.NodeVisitor):
                 return tmp
             if fname == "hasattr" and self.permissive:
                 return "mp_const_false"
+            if fname in self._funcs:
+                return self._emit_user_call(fname, node)
             func = self._emit_expr(node.func)
             return self._emit_generic_call(func, node)
         if isinstance(node.func, ast.Attribute):
             return self._emit_method_call(node)
         func = self._emit_expr(node.func)
         return self._emit_generic_call(func, node)
+
+    def _emit_user_call(self, fname: str, node: ast.Call) -> str:
+        if node.keywords:
+            if self.permissive:
+                return "mp_const_none"
+            raise TranslateError("keyword call arguments are not supported", node.lineno)
+        cname = self._func_cname(fname)
+        args_c = [self._emit_expr(a) for a in node.args]
+        tmp = self.fresh("_fcall")
+        self.emit(f"mp_obj_t {tmp} = {cname}({', '.join(args_c)});")
+        return tmp
 
     def _emit_generic_call(self, func_c: str, node: ast.Call) -> str:
         if node.keywords and not self.permissive:
@@ -777,8 +851,6 @@ _UNSUPPORTED_STMTS = (
     "Try",
     "TryStar",
     "With",
-    "Raise",
-    "Return",
     "Global",
     "Nonlocal",
     "Assert",
@@ -788,6 +860,15 @@ _UNSUPPORTED_STMTS = (
 for _stmt_name in _UNSUPPORTED_STMTS:
     if hasattr(ast, _stmt_name):
         setattr(Emitter, f"visit_{_stmt_name}", Emitter._unsupported_stmt)
+
+
+def body_ends_with_return(lines: list[str]) -> bool:
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        return stripped.startswith("return ")
+    return False
 
 
 def c_string_literal(s: str) -> tuple[str, int]:
@@ -825,13 +906,22 @@ def translate(source: str, filename: str = "<stdin>", *, permissive: bool = Fals
         tree = ast.parse(source, filename=filename, mode="exec")
     emitter = Emitter(permissive=permissive)
     emitter.visit(tree)
-    body = "\n".join(f"    {line}" if line else "" for line in emitter.lines)
-    return (
-        HEADER
-        + "\nvoid script_run(void) {\n"
-        + body
-        + "\n}\n"
-    )
+    parts = [HEADER]
+    for cname, params, body in emitter._func_defs:
+        plist = ", ".join(params) if params else "void"
+        parts.append(f"static mp_obj_t {cname}({plist});\n")
+    parts.append("")
+    for cname, params, body in emitter._func_defs:
+        plist = ", ".join(params) if params else "void"
+        parts.append(f"static mp_obj_t {cname}({plist}) {{")
+        for line in body:
+            parts.append(f"    {line}" if line else "")
+        parts.append("}\n")
+    parts.append("void script_run(void) {")
+    for line in emitter.lines:
+        parts.append(f"    {line}" if line else "")
+    parts.append("}\n")
+    return "\n".join(parts)
 
 
 def translate_file(path: str | os.PathLike[str], *, permissive: bool = True) -> str:

@@ -56,11 +56,68 @@ Usage:
     python3 py2c.py spots.py        # transpile the given file(s) -> /tmp
     python3 py2c.py --out DIR ...   # choose a different output directory
     python3 py2c.py --conventions   # print the naming-convention rules
+    python3 py2c.py --stdlib-dir DIR --out DIR
+                                    # batch-transpile python-stdlib to C
 """
-
 import ast
 import os
+import re
 import sys
+from pathlib import Path
+
+
+# ==========================================================================
+# python-stdlib module index (micropython-lib layout)
+# ==========================================================================
+
+_STDLIB_INDEX_CACHE: dict[str, dict[str, str]] = {}
+
+
+def build_stdlib_index(stdlib_root):
+    """Map dotted Python module names to .py source paths."""
+    stdlib_root = os.fspath(stdlib_root)
+    if stdlib_root in _STDLIB_INDEX_CACHE:
+        return _STDLIB_INDEX_CACHE[stdlib_root]
+    index = {}
+    root = Path(stdlib_root)
+    for pkg_dir in sorted(root.iterdir()):
+        if not pkg_dir.is_dir():
+            continue
+        manifest = pkg_dir / "manifest.py"
+        if not manifest.is_file():
+            continue
+        package = None
+        module_files = []
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            line = line.split("#")[0].strip()
+            m = re.match(r'package\("([^"]+)"\)', line)
+            if m:
+                package = m.group(1)
+            m = re.match(r'module\("([^"]+)"\)', line)
+            if m:
+                module_files.append(m.group(1))
+        if package:
+            for py in pkg_dir.rglob("*.py"):
+                if py.name == "manifest.py":
+                    continue
+                rel = py.relative_to(pkg_dir)
+                if not rel.parts or rel.parts[0] != package:
+                    continue
+                if py.name == "__init__.py":
+                    mod = ".".join(rel.parts[:-1])
+                else:
+                    mod = ".".join(rel.with_suffix("").parts)
+                index[mod] = str(py)
+        for mf in module_files:
+            path = pkg_dir / mf
+            if path.is_file():
+                index[Path(mf).stem] = str(path)
+    _STDLIB_INDEX_CACHE[stdlib_root] = index
+    return index
+
+
+MICROPYTHON_TOP = Path(__file__).resolve().parents[1]
+DEFAULT_STDLIB = MICROPYTHON_TOP / "lib" / "micropython-lib" / "python-stdlib"
 
 
 # ==========================================================================
@@ -148,6 +205,7 @@ typedef struct { obj* data; int len; int cap; } List;
 obj  list_new(void);
 obj  list_of(int n, ...);          /* [a, b, c] literal                       */
 void list_append(obj lst, obj v);
+void list_insert(obj lst, long i, obj v);
 void list_extend(obj lst, obj it);      /* append all elements of it           */
 obj  list_get(obj lst, long i);    /* supports negative indices               */
 void list_set(obj lst, long i, obj v);
@@ -238,6 +296,104 @@ long py_int_base(str s, long base);     /* int(s, base) incl 0x/0b/0o prefix   *
 long pyabs(long x);
 
 #endif /* SHIVYC_RT_H */
+'''
+
+MP_BRIDGE_H = r'''#ifndef MP_STDLIB_BRIDGE_H
+#define MP_STDLIB_BRIDGE_H
+#include "shivyc_rt.h"
+obj mp_call_import(const char* mod, const char* attr, int n, ...);
+obj mp_call_method(obj recv, const char* attr, int n, ...);
+bool mp_hasattr(obj recv, const char* attr);
+obj mp_getattr(obj recv, const char* attr, obj dflt);
+obj mp_getattr_obj(obj recv, obj attr, obj dflt);
+#endif
+'''
+
+MP_BRIDGE_C = r'''#include "mp_stdlib_bridge.h"
+#include <stdarg.h>
+#include <string.h>
+#include "py/runtime.h"
+#include "py/obj.h"
+#include "py/objstr.h"
+#include "py/objlist.h"
+#include "py/qstr.h"
+
+static mp_obj_t obj_to_mp(obj v) {
+    switch (v.tag) {
+        case T_NONE: return mp_const_none;
+        case T_INT: return mp_obj_new_int(v.u.i);
+        case T_BOOL: return mp_obj_new_bool((bool)v.u.i);
+        case T_STR: return mp_obj_new_str(v.u.s, v.u.s ? strlen(v.u.s) : 0);
+        case T_FLOAT: return mp_obj_new_float(v.u.d);
+        case T_LIST: {
+            List* l = (List*)v.u.o;
+            mp_obj_t items[l->len];
+            for (int i = 0; i < l->len; i++) items[i] = obj_to_mp(l->data[i]);
+            return mp_obj_new_list(l->len, items);
+        }
+        default: return mp_const_none;
+    }
+}
+
+static obj mp_to_obj(mp_obj_t v) {
+    if (v == mp_const_none) return OBJ_NONE;
+    if (v == mp_const_true) return OBJ_BOOL(1);
+    if (v == mp_const_false) return OBJ_BOOL(0);
+    if (mp_obj_is_integer(v)) return OBJ_INT(mp_obj_get_int(v));
+    if (mp_obj_is_str(v)) {
+        size_t len; const char* s = mp_obj_str_get_data(v, &len);
+        char* out = aalloc(len + 1);
+        memcpy(out, s, len); out[len] = 0;
+        return OBJ_STR(out);
+    }
+    if (mp_obj_is_float(v)) return OBJ_FLOAT(mp_obj_get_float(v));
+    return OBJ_OBJ((Obj*)v);
+}
+
+obj mp_call_import(const char* mod, const char* attr, int n, ...) {
+    qstr qm = qstr_from_str(mod);
+    mp_obj_t module = mp_import_name(qm, MP_OBJ_NEW_SMALL_INT(0), MP_OBJ_NEW_SMALL_INT(0));
+    qstr qa = qstr_from_str(attr);
+    mp_obj_t fun = mp_load_attr(module, qa);
+    mp_obj_t args[n];
+    va_list ap; va_start(ap, n);
+    for (int i = 0; i < n; i++) args[i] = obj_to_mp(va_arg(ap, obj));
+    va_end(ap);
+    return mp_to_obj(mp_call_function_n_kw(fun, n, 0, args));
+}
+
+obj mp_call_method(obj recv, const char* attr, int n, ...) {
+    mp_obj_t dest[4];
+    mp_obj_t o = obj_to_mp(recv);
+    qstr qa = qstr_from_str(attr);
+    mp_load_method(o, qa, dest);
+    mp_obj_t args[n];
+    va_list ap; va_start(ap, n);
+    for (int i = 0; i < n; i++) args[i] = obj_to_mp(va_arg(ap, obj));
+    va_end(ap);
+    return mp_to_obj(mp_call_method_n_kw(n, 0, args));
+}
+
+bool mp_hasattr(obj recv, const char* attr) {
+    return mp_obj_has_attr(obj_to_mp(recv), qstr_from_str(attr));
+}
+
+obj mp_getattr(obj recv, const char* attr, obj dflt) {
+    mp_obj_t o = obj_to_mp(recv);
+    qstr qa = qstr_from_str(attr);
+    if (!mp_obj_has_attr(o, qa)) return dflt;
+    return mp_to_obj(mp_load_attr(o, qa));
+}
+
+obj mp_getattr_obj(obj recv, obj attr, obj dflt) {
+    mp_obj_t o = obj_to_mp(recv);
+    mp_obj_t a = obj_to_mp(attr);
+    size_t len; const char* s = mp_obj_str_get_data(a, &len);
+    char buf[256];
+    if (len >= sizeof buf) len = sizeof buf - 1;
+    memcpy(buf, s, len); buf[len] = 0;
+    return mp_getattr(recv, buf, dflt);
+}
 '''
 
 RUNTIME_C = r'''/* ShivyCX transpiler runtime -- generated by tools/py2c.py */
@@ -418,6 +574,22 @@ void list_append(obj lst, obj v) {
         l->data = nd; l->cap = nc;
     }
     l->data[l->len++] = v;
+}
+void list_insert(obj lst, long i, obj v) {
+    List* l = (List*)lst.u.o;
+    if (i < 0) i += l->len;
+    if (i < 0) i = 0;
+    if (i > l->len) i = l->len;
+    if (l->len == l->cap) {
+        int nc = l->cap ? l->cap * 2 : 4;
+        obj* nd = aalloc(sizeof(obj) * nc);
+        memcpy(nd, l->data, sizeof(obj) * l->len);
+        l->data = nd; l->cap = nc;
+    }
+    for (long j = l->len; j > i; j--)
+        l->data[j] = l->data[j - 1];
+    l->data[i] = v;
+    l->len++;
 }
 void list_extend(obj lst, obj it) {
     long n = pylen(it);
@@ -1654,10 +1826,13 @@ def class_csym(name, modname, ambiguous):
 
 
 class Transpiler:
-    def __init__(self, modname, base_dir=None):
+    def __init__(self, modname, base_dir=None, stdlib_root=None):
         self.modname = modname
         self.cmod = modname.replace(".", "_")   # C-safe form (e.g. for _init)
         self.base_dir = base_dir    # repo dir containing the shivyc/ package
+        self.stdlib_root = os.fspath(stdlib_root) if stdlib_root else None
+        self.stdlib_index = build_stdlib_index(self.stdlib_root) \
+            if self.stdlib_root else {}
         self.lines = []
         self.cur_class = None
         self.modules = set()
@@ -2099,7 +2274,7 @@ class Transpiler:
                     self.import_alias[alias] = a.name
             elif isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
-                if node.level == 0 and mod.startswith("shivyc"):
+                if node.level == 0 and mod:
                     for a in node.names:
                         self.from_imports[a.asname or a.name] = mod
 
@@ -2275,8 +2450,12 @@ class Transpiler:
         cache[modname] = None       # guard against import cycles
         reg = {"classes": {}, "funcs": {}, "singletons": {}, "vt": set(),
                "order": [], "imports": {}, "consts": {}, "globals": {}}
+        path = None
         if self.base_dir and modname.startswith("shivyc"):
             path = os.path.join(self.base_dir, *modname.split(".")) + ".py"
+        elif modname in self.stdlib_index:
+            path = self.stdlib_index[modname]
+        if path:
             try:
                 t = ast.parse(open(path, encoding="utf-8").read())
                 classes, order, vt = collect_classes(t)
@@ -2590,12 +2769,47 @@ class Transpiler:
     def prelude(self):
         bar = "/* " + "=" * 66 + " */"
         self.emit(bar)
-        self.emit("/*  Transpiled from shivyc/%s.py by tools/py2c.py        */"
-                  % self.modname)
+        if self.stdlib_root:
+            self.emit("/*  Transpiled from python-stdlib/%s by tools/py2c.py */"
+                      % self.modname)
+        else:
+            self.emit("/*  Transpiled from shivyc/%s.py by tools/py2c.py        */"
+                      % self.modname)
         self.emit("/*  Object model: arena + per-class vtable (see py2c.py).  */")
         self.emit(bar)
         self.emit('#include "shivyc_rt.h"')
+        if self.stdlib_root:
+            self.emit('#include "mp_stdlib_bridge.h"')
         self.emit()
+
+    def _mp_import_call(self, mod, attr, node):
+        nargs = len(node.args)
+        wrapped = [self.wrap_obj(a) for a in node.args]
+        sm, sa = c_string(mod), c_string(attr)
+        if nargs == 0:
+            return "mp_call_import(%s, %s, 0)" % (sm, sa)
+        if nargs == 1:
+            return "mp_call_import(%s, %s, 1, %s)" % (sm, sa, wrapped[0])
+        if nargs == 2:
+            return "mp_call_import(%s, %s, 2, %s, %s)" % (
+                sm, sa, wrapped[0], wrapped[1])
+        return "mp_call_import(%s, %s, %d, %s)" % (
+            sm, sa, nargs, ", ".join(wrapped))
+
+    def _mp_method_call(self, recv, attr, node):
+        nargs = len(node.args)
+        wrapped = [self.wrap_obj(a) for a in node.args]
+        r = self.wrap_obj(recv) if not isinstance(recv, str) else recv
+        sa = c_string(attr)
+        if nargs == 0:
+            return "mp_call_method(%s, %s, 0)" % (r, sa)
+        if nargs == 1:
+            return "mp_call_method(%s, %s, 1, %s)" % (r, sa, wrapped[0])
+        if nargs == 2:
+            return "mp_call_method(%s, %s, 2, %s, %s)" % (
+                r, sa, wrapped[0], wrapped[1])
+        return "mp_call_method(%s, %s, %d, %s)" % (
+            r, sa, nargs, ", ".join(wrapped))
 
     def emit_typeinfo_struct(self):
         self.emit("/* Per-module type descriptor: header + vtable slots. */")
@@ -3204,9 +3418,11 @@ class Transpiler:
                                            self.src1(node))]
         try:
             return m(node)
-        except Unsupported as e:
-            return ["/* %s */" % e]
+        except Unsupported:
+            raise
         except Exception as e:
+            if self.stdlib_root:
+                raise Unsupported(str(e)) from e
             return ["/* transpile-error (%s): %s */" % (e, self.src1(node))]
 
     def st_Expr(self, node):
@@ -3432,6 +3648,8 @@ class Transpiler:
                     if kind == "func":
                         return ann_to_ctype(info.returns) or OBJ
                     if kind == "global":
+                        return OBJ
+                    if self.stdlib_root:
                         return OBJ
                     if not self.import_alias[f.value.id].startswith("shivyc"):
                         return OBJ
@@ -3821,9 +4039,11 @@ class Transpiler:
                                               self.src1(node))
         try:
             return m(node)
-        except Unsupported as e:
-            return "/* %s */ OBJ_NONE" % e
+        except Unsupported:
+            raise
         except Exception as e:
+            if self.stdlib_root:
+                raise Unsupported(str(e)) from e
             return "/* expr-error %s */ OBJ_NONE" % e
 
     def ex_Name(self, node):
@@ -4014,6 +4234,9 @@ class Transpiler:
                     self.xstructs_needed.add(owner.name)
                 return "((%s*)AS_OBJ(%s))->%s" % (
                     owner.csym, self.expr(node.value), cname(node.attr))
+            if self.stdlib_root:
+                return "mp_getattr(%s, %s, OBJ_NONE)" % (
+                    self.wrap_obj(node.value), c_string(node.attr))
             return "OBJ_NONE /* %s.%s */" % (self.src1(node.value), node.attr)
         return "%s.%s" % (self.expr(node.value), cname(node.attr))
 
@@ -4118,8 +4341,11 @@ class Transpiler:
                 return "pylist(%s)" % self.wrap_obj(node.args[0]) if node.args \
                     else "list_new()"
             if fn == "dict":
-                return "dict_new()" if not node.args else \
-                    "dict_new() /* dict(arg) unsupported */"
+                if not node.args:
+                    return "dict_new()"
+                if self.stdlib_root:
+                    return self._mp_import_call("builtins", "dict", node)
+                return "dict_new() /* dict(arg) unsupported */"
             if fn == "ord" and node.args:
                 return "pyord(%s)" % self.wrap_obj(node.args[0])
             if fn == "chr" and node.args:
@@ -4148,7 +4374,16 @@ class Transpiler:
                 if owner:
                     return self.lower_isinstance(
                         node.args[0], ast.Name(id=owner.name))
+                if self.stdlib_root:
+                    return "mp_hasattr(%s, %s)" % (
+                        self.wrap_obj(node.args[0]),
+                        c_string(node.args[1].value))
                 return "0 /* hasattr: dynamic attr, unsupported */"
+            if fn == "hasattr" and len(node.args) == 2 and self.stdlib_root \
+                    and isinstance(node.args[1], ast.Constant) \
+                    and isinstance(node.args[1].value, str):
+                return "mp_hasattr(%s, %s)" % (
+                    self.wrap_obj(node.args[0]), c_string(node.args[1].value))
             if fn == "getattr" and len(node.args) >= 2 and \
                     isinstance(node.args[1], ast.Constant) and \
                     isinstance(node.args[1].value, str):
@@ -4162,10 +4397,24 @@ class Transpiler:
                         self.xstructs_needed.add(owner.name)
                     return "((%s*)AS_OBJ(%s))->%s" % (
                         owner.csym, self.wrap_obj(node.args[0]), cname(attr))
+                if self.stdlib_root:
+                    return "mp_getattr(%s, %s, %s)" % (
+                        self.wrap_obj(node.args[0]), c_string(attr), dflt)
                 return dflt
             if fn == "getattr" and len(node.args) >= 2:
-                # dynamic attribute name (e.g. reflecting over a module): cannot
-                # be resolved statically, so fall back to the supplied default.
+                if self.stdlib_root and isinstance(node.args[1], ast.Constant) \
+                        and isinstance(node.args[1].value, str):
+                    dflt = self.wrap_obj(node.args[2]) if len(node.args) > 2 \
+                        else "OBJ_NONE"
+                    return "mp_getattr(%s, %s, %s)" % (
+                        self.wrap_obj(node.args[0]),
+                        c_string(node.args[1].value), dflt)
+                if self.stdlib_root:
+                    dflt = self.wrap_obj(node.args[2]) if len(node.args) > 2 \
+                        else "OBJ_NONE"
+                    return "mp_getattr_obj(%s, %s, %s)" % (
+                        self.wrap_obj(node.args[0]),
+                        self.wrap_obj(node.args[1]), dflt)
                 return self.wrap_obj(node.args[2]) if len(node.args) > 2 \
                     else "OBJ_NONE /* getattr: dynamic attr, unsupported */"
             if fn in self.classes:
@@ -4193,6 +4442,8 @@ class Transpiler:
                     defs = self.defaults_for(info, False)
                     cargs = self.coerce_args(pct, node.args, defs)
                     return "%s(%s)" % (fn, ", ".join(cargs))
+                if self.stdlib_root:
+                    return self._mp_import_call(self.from_imports[fn], fn, node)
             # calling an obj-typed local/param: a first-class function value
             if fn in self.scope and self.scope[fn] == OBJ \
                     and fn not in self.func_params and fn not in self.classes:
@@ -4333,9 +4584,9 @@ class Transpiler:
                     defs = self.defaults_for(info, False)
                     cargs = self.coerce_args(pct, node.args, defs)
                     return "%s(%s)" % (cname(func.attr), ", ".join(cargs))
+                if self.stdlib_root:
+                    return self._mp_import_call(modname, func.attr, node)
                 if not modname.startswith("shivyc"):
-                    # unsupported stdlib (re/os/pickle/subprocess/...): no C
-                    # runtime equivalent -> degrade to None so the file builds.
                     for a in node.args:
                         self.expr(a)
                     return "OBJ_NONE /* %s.%s(...) unsupported */" % (
@@ -4448,6 +4699,13 @@ class Transpiler:
                 if func.attr in self.hierarchy_method:
                     return self.xvcall(self.hierarchy_method[func.attr],
                                        func.value, func.attr, node.args)
+            if func.attr == "insert" and len(node.args) == 2 and \
+                    func.attr not in self.method_owners:
+                lo = self.coerce_to("int", node.args[0], self.expr(node.args[0]))
+                return "list_insert(%s, %s, %s)" % (
+                    self.wrap_obj(func.value), lo, self.wrap_obj(node.args[1]))
+            if self.stdlib_root:
+                return self._mp_method_call(func.value, func.attr, node)
             recv = self.expr(func.value)
             return "%s(%s)" % (func.attr, ", ".join([recv] + argstrs))
 
@@ -4943,6 +5201,8 @@ class Transpiler:
         if m == "splitlines":
             return "str_splitlines(%s)" % recv()
         if m == "replace":
+            if len(a) < 2:
+                return None
             return "str_replace(%s, %s, %s)" % (recv(), self.as_str(a[0]),
                                                 self.as_str(a[1]))
         if m == "find":
@@ -5310,38 +5570,105 @@ def c_string(s):
 # Driver
 # ==========================================================================
 
-def write_runtime(out_dir):
+def write_runtime(out_dir, mp_bridge=False):
     with open(os.path.join(out_dir, "shivyc_rt.h"), "w") as f:
         f.write(RUNTIME_H)
     with open(os.path.join(out_dir, "shivyc_rt.c"), "w") as f:
         f.write(RUNTIME_C)
+    if mp_bridge:
+        with open(os.path.join(out_dir, "mp_stdlib_bridge.h"), "w") as f:
+            f.write(MP_BRIDGE_H)
+        with open(os.path.join(out_dir, "mp_stdlib_bridge.c"), "w") as f:
+            f.write(MP_BRIDGE_C)
 
 
-def transpile_file(path, out_dir):
-    src = open(path, encoding="utf-8").read()
+def relative_stdlib_slug(stdlib_dir, py_path):
+    rel = Path(py_path).resolve().relative_to(Path(stdlib_dir).resolve())
+    return rel.as_posix().replace("/", "_").removesuffix(".py")
+
+
+def _stdlib_context(path, stdlib_dir=None):
     ap = os.path.abspath(path)
     parts = ap.split(os.sep)
+    if stdlib_dir is None and "python-stdlib" in parts:
+        i = parts.index("python-stdlib")
+        stdlib_dir = os.sep.join(parts[: i + 1])
+    if stdlib_dir and os.path.commonpath([ap, os.path.abspath(stdlib_dir)]) == \
+            os.path.abspath(stdlib_dir):
+        modname = relative_stdlib_slug(stdlib_dir, path)
+        return modname, None, stdlib_dir
     if "shivyc" in parts:
         i = parts.index("shivyc")
         base_dir = os.sep.join(parts[:i]) or os.sep
-        rel = parts[i:]                     # e.g. ['shivyc','il_cmds','value.py']
-        if len(rel) == 2:                   # top-level module: keep basename
+        rel = parts[i:]
+        if len(rel) == 2:
             modname = rel[1][:-3]
-        else:                               # submodule: dotted, unique output
+        else:
             modname = ".".join(rel)[:-3]
-    else:
-        base_dir = os.path.dirname(ap)
-        modname = os.path.splitext(os.path.basename(path))[0]
+        return modname, base_dir, None
+    return os.path.splitext(os.path.basename(path))[0], os.path.dirname(ap), None
+
+
+def transpile_file(path, out_dir, stdlib_dir=None):
+    src = open(path, encoding="utf-8").read()
+    modname, base_dir, stdlib_root = _stdlib_context(path, stdlib_dir)
     try:
         tree = ast.parse(src, filename=path)
     except SyntaxError as e:
         print("  SYNTAX ERROR in %s: %s" % (path, e))
-        return None
-    out = Transpiler(modname, base_dir).run(tree)
+        return None, str(e)
+    try:
+        out = Transpiler(modname, base_dir, stdlib_root=stdlib_root).run(tree)
+    except Unsupported as e:
+        print("  FAIL %s: %s" % (path, e))
+        return None, str(e)
     out_path = os.path.join(out_dir, modname + ".c")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(out)
-    return out_path
+    return out_path, None
+
+
+def translate_stdlib(stdlib_dir, out_dir, report_path):
+    stdlib_dir = Path(stdlib_dir)
+    out_dir = Path(out_dir)
+    report_path = Path(report_path)
+    ok, failed = [], []
+    files = sorted(stdlib_dir.rglob("*.py"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_runtime(str(out_dir), mp_bridge=True)
+    for py_path in files:
+        rel = py_path.relative_to(stdlib_dir).as_posix()
+        res, err = transpile_file(str(py_path), str(out_dir), str(stdlib_dir))
+        if res is None:
+            failed.append((rel, err or "unknown error"))
+        else:
+            ok.append(rel)
+    lines = [
+        "micropython-lib python-stdlib -> C (via tools/py2c.py)",
+        "stdlib: %s" % stdlib_dir,
+        "output: %s" % out_dir,
+        "",
+        "OK:   %d" % len(ok),
+        "FAIL: %d" % len(failed),
+        "",
+    ]
+    if ok:
+        lines.append("=== translated ===")
+        lines.extend("  %s" % name for name in ok)
+        lines.append("")
+    if failed:
+        lines.append("=== failures ===")
+        for name, err in failed:
+            lines.append("  %s" % name)
+            lines.append("    %s" % err)
+        lines.append("")
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return ok, failed
+
+
+def transpile_file_legacy(path, out_dir):
+    res, _err = transpile_file(path, out_dir)
+    return res
 
 
 def print_conventions():
@@ -5350,6 +5677,8 @@ def print_conventions():
 
 def main(argv):
     out_dir = "/tmp"
+    stdlib_dir = None
+    report_path = None
     files = []
     i = 0
     while i < len(argv):
@@ -5358,26 +5687,49 @@ def main(argv):
             out_dir = argv[i + 1]
             i += 2
             continue
+        if a == "--stdlib-dir":
+            stdlib_dir = argv[i + 1]
+            i += 2
+            continue
+        if a == "--report":
+            report_path = argv[i + 1]
+            i += 2
+            continue
         if a in ("--conventions", "-c"):
             print_conventions()
             return
         files.append(a)
         i += 1
 
+    if stdlib_dir is not None:
+        if report_path is None:
+            report_path = os.path.join(out_dir, "stdlib_translate_report.txt")
+        ok, failed = translate_stdlib(stdlib_dir, out_dir, report_path)
+        print("translated %d file(s), %d failed" % (len(ok), len(failed)))
+        print("report: %s" % report_path)
+        sys.exit(1 if failed else 0)
+
     if not files:
         here = os.path.dirname(os.path.abspath(__file__))
         shivyc = os.path.normpath(os.path.join(here, "..", "shivyc"))
-        files = sorted(os.path.join(shivyc, f)
-                       for f in os.listdir(shivyc) if f.endswith(".py"))
-        print("No files given; defaulting to %d files in %s" %
-              (len(files), shivyc))
+        if os.path.isdir(shivyc):
+            files = sorted(os.path.join(shivyc, f)
+                           for f in os.listdir(shivyc) if f.endswith(".py"))
+            print("No files given; defaulting to %d files in %s" %
+                  (len(files), shivyc))
+        else:
+            print("error: no input files and no ../shivyc directory", file=sys.stderr)
+            sys.exit(2)
 
     os.makedirs(out_dir, exist_ok=True)
-    write_runtime(out_dir)
+    _, _, stdlib_root = _stdlib_context(files[0] if len(files) == 1 else "", None)
+    mp_bridge = bool(stdlib_dir) or any(
+        "python-stdlib" in os.path.abspath(p) for p in files)
+    write_runtime(out_dir, mp_bridge=mp_bridge)
     print("  runtime -> %s/shivyc_rt.{h,c}" % out_dir)
     ok = 0
     for path in files:
-        res = transpile_file(path, out_dir)
+        res, _err = transpile_file(path, out_dir)
         if res:
             ok += 1
             print("  %-28s -> %s" % (os.path.basename(path), res))
