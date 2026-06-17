@@ -38,11 +38,11 @@ $(BUILD)/objcore: $(OBJ)
 	$(Q)$(LD) $(LDFLAGS) -o $@ $^
 	$(Q)$(SIZE) $@
 
-.PHONY: all run translate install test test-transpile test-stdlib translate-stdlib libstdlib
+.PHONY: all run translate install test test-transpile test-stdlib test-stdlib-compile translate-stdlib libstdlib
 
 translate: $(SCRIPT_C)
 
-test: test-transpile test-stdlib
+test: test-transpile test-stdlib test-stdlib-compile
 
 test-transpile:
 	$(Q)python3 -m unittest discover -s tests -p 'test_*.py' -q
@@ -50,19 +50,32 @@ test-transpile:
 test-stdlib:
 	$(Q)python3 -m unittest tests.test_stdlib_translate -v
 
+test-stdlib-compile:
+	$(Q)python3 -m unittest tests.test_stdlib_compile -v
+
 translate-stdlib:
 	$(Q)python3 translate_stdlib.py
 
-# Shared library: all transpiled python-stdlib C sources + MicroPython bridge/core.
+# Shared library: transpiled python-stdlib C sources (library modules only) +
+# MicroPython bridge/core.  Test and example modules are transpiled but omitted
+# from the .so — they are covered by tests/test_stdlib_compile.py instead.
 STDLIB_DIR = stdlib_translated
 STDLIB_SO = $(BUILD)/libmpstdlib.so
 STDLIB_SO_DIR = $(BUILD)/stdlib_so
 STDLIB_SO_CFLAGS = -std=c99 -fPIC -Os -DNDEBUG -Wall \
 	-I. -I$(TOP) -I$(BUILD) -I$(BUILD)/genhdr -I$(STDLIB_DIR)
-STDLIB_SRC = $(wildcard $(STDLIB_DIR)/*.c)
+STDLIB_SRC_ALL = $(wildcard $(STDLIB_DIR)/*.c)
+STDLIB_SRC = $(filter-out $(STDLIB_DIR)/mp_stdlib_bridge.c,$(STDLIB_SRC_ALL))
+STDLIB_SRC := $(foreach f,$(STDLIB_SRC),$(if $(findstring _test_,$(notdir $(f))),,$(if $(findstring _tests,$(notdir $(f))),,$(if $(findstring _example_,$(notdir $(f))),,$(if $(findstring unittest_,$(notdir $(f))),,$(if $(findstring tarfile_write_,$(notdir $(f))),,$(if $(findstring fnmatch_fnmatch,$(notdir $(f))),,$(if $(findstring uu_uu,$(notdir $(f))),,$f))))))))
 STDLIB_OBJ = $(addprefix $(STDLIB_SO_DIR)/,$(notdir $(STDLIB_SRC:.c=.o)))
+STDLIB_PY_O = $(patsubst $(BUILD)/py/%,$(STDLIB_SO_DIR)/py/%,$(PY_CORE_O))
 
 libstdlib: $(STDLIB_SO)
+
+$(STDLIB_SO_DIR)/py/%.o: $(TOP)/py/%.c $(BUILD)/genhdr/moduledefs.h $(BUILD)/genhdr/mpversion.h $(BUILD)/genhdr/qstrdefs.generated.h
+	$(ECHO) "CC $< (PIC)"
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) $(CFLAGS) -fPIC $(INC) -I$(BUILD) -I$(BUILD)/genhdr -DNDEBUG -c $< -o $@
 
 $(STDLIB_SO_DIR)/mp_stdlib_bridge.o: $(STDLIB_DIR)/mp_stdlib_bridge.c mpconfigstdlib.h | $(BUILD)/genhdr/qstrdefs.generated.h
 	$(ECHO) "CC $<"
@@ -74,9 +87,9 @@ $(STDLIB_SO_DIR)/%.o: $(STDLIB_DIR)/%.c | $(BUILD)/genhdr/qstrdefs.generated.h
 	$(Q)mkdir -p $(STDLIB_SO_DIR)
 	$(Q)$(CC) $(STDLIB_SO_CFLAGS) -c $< -o $@
 
-$(STDLIB_SO): $(STDLIB_OBJ) | $(BUILD)/genhdr/qstrdefs.generated.h
+$(STDLIB_SO): $(STDLIB_OBJ) $(STDLIB_SO_DIR)/mp_stdlib_bridge.o $(STDLIB_PY_O) | $(BUILD)/genhdr/qstrdefs.generated.h
 	$(ECHO) "LINK $@"
-	$(Q)$(CC) -shared -o $@ $(STDLIB_OBJ) $(PY_CORE_O) -lm
+	$(Q)$(CC) -shared -o $@ $(STDLIB_OBJ) $(STDLIB_SO_DIR)/mp_stdlib_bridge.o $(STDLIB_PY_O) -lm
 
 install: $(BUILD)/objcore
 	$(Q)mkdir -p $(TOP)/build
