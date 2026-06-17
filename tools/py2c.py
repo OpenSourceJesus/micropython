@@ -1316,12 +1316,43 @@ def _param_used_in_isinstance(fn, name):
     return False
 
 
+def _param_assigned_from_call(fn, name, call_names):
+    """True if `name` is assigned from a call like input()."""
+    for n in ast.walk(fn):
+        if not isinstance(n, ast.Assign):
+            continue
+        for t in n.targets:
+            if isinstance(t, ast.Name) and t.id == name and \
+                    isinstance(n.value, ast.Call):
+                f = n.value.func
+                if isinstance(f, ast.Name) and f.id in call_names:
+                    return True
+                if isinstance(f, ast.Attribute) and f.attr in call_names:
+                    return True
+    return False
+
+
+def _param_used_in_str_compare(fn, name):
+    """True if `name` is compared with ==/!= (likely a str in stdlib code)."""
+    for n in ast.walk(fn):
+        if not isinstance(n, ast.Compare):
+            continue
+        sides = [n.left] + list(n.comparators)
+        if any(isinstance(s, ast.Name) and s.id == name for s in sides):
+            return True
+    return False
+
+
 def arg_ctype(fn, arg):
     if arg.annotation is not None:
         return ann_to_ctype(arg.annotation) or OBJ
     if arg.arg in optional_param_names(fn):
         return OBJ
     if _param_used_in_isinstance(fn, arg.arg):
+        return OBJ
+    if _param_assigned_from_call(fn, arg.arg, {"input", "raw_input"}):
+        return OBJ
+    if _param_used_in_str_compare(fn, arg.arg):
         return OBJ
     guess = infer_from_name(arg.arg)
     if guess in ("bool", "int") and _param_used_as_container(fn, arg.arg):
@@ -1909,7 +1940,7 @@ STDLIB_BUILTINS = {
     "super", "property", "staticmethod", "classmethod", "object",
     "map", "filter", "zip", "enumerate", "reversed", "sorted", "sum", "min",
     "max", "any", "all", "print", "len", "range", "list", "dict", "set",
-    "divmod", "issubclass", "setattr", "tuple",
+    "divmod", "issubclass", "setattr", "tuple", "hasattr", "getattr",
 }
 
 # Exception / warning types resolved from the builtins module.
@@ -2389,9 +2420,11 @@ class Transpiler:
                     params = self.param_list(fn, skip_self=True)
                     cargs = ", ".join(params) if params else "void"
                     protos.append("%s* %s_new(%s);" % (ci.csym, ci.csym, cargs))
+                else:
+                    protos.append("%s* %s_new(void);" % (ci.csym, ci.csym))
             for mname, fn in ci.methods.items():
                 if mname.startswith("__") and mname.endswith("__") \
-                        and mname != "__init__":
+                        and mname not in ("__init__", "__enter__", "__exit__"):
                     continue
                 ret = self._c_ret(fn)
                 if mname in ci.static_methods:   # @staticmethod: no self
@@ -2412,9 +2445,10 @@ class Transpiler:
                         cargs = ", ".join(params) if params else "void"
                     protos.append("%s* %s_new(%s);" % (ci.csym, ci.csym, cargs))
                 elif mname in VTABLE_METHODS:
+                    vparams = self._vtable_c_param_list(fn)
                     protos.append("%s %s_%s(Obj* self_%s);" % (
                         ret, ci.csym, mname,
-                        (", " + ", ".join(params)) if params else ""))
+                        (", " + ", ".join(vparams)) if vparams else ""))
                 else:
                     plist = ", ".join(["%s* self" % ci.csym] + params)
                     protos.append("%s %s_%s(%s);" % (ret, ci.csym, mname, plist))
@@ -3089,7 +3123,7 @@ class Transpiler:
             if not fn:
                 continue
             ret = self._c_ret(fn)
-            params = [arg_ctype(fn, a) for a in fn.args.args[1:]]
+            params = self._method_proto_params(fn)
             fndef = fn
             break
         # canonical methods not overridden locally: take the imported root's
@@ -3098,9 +3132,31 @@ class Transpiler:
             fn = self.vt_root.methods.get(mname)
             if fn is not None:
                 ret = self._c_ret(fn)
-                params = [arg_ctype(fn, a) for a in fn.args.args[1:]]
+                params = self._method_proto_params(fn)
                 fndef = fn
         return ret, params, fndef
+
+    def _method_proto_params(self, fn):
+        """Named params plus boxed *args/**kwargs for a stable vtable ABI."""
+        params = [arg_ctype(fn, a) for a in fn.args.args[1:]]
+        if fn.args.kwarg:
+            params.append(OBJ)
+        if fn.args.vararg:
+            params.append(OBJ)
+        return params
+
+    def _vtable_c_param_list(self, fn):
+        parts = []
+        for arg in fn.args.args[1:]:
+            ct = self.arg_ctype_q(fn, arg)
+            if fn.name in VTABLE_METHODS and self._is_class_ptr(ct):
+                ct = OBJ
+            parts.append("%s %s" % (self.ctype_csym(ct), cname(arg.arg)))
+        if fn.args.kwarg:
+            parts.append("obj %s" % cname(fn.args.kwarg.arg))
+        if fn.args.vararg:
+            parts.append("obj %s" % cname(fn.args.vararg.arg))
+        return parts
 
     # ---- struct emission -------------------------------------------------
 
@@ -3133,14 +3189,17 @@ class Transpiler:
             if ni is not None:
                 owner, fn = ni
                 self.emit_inherited_constructor(ci, owner, fn)
+            else:
+                self.emit_default_constructor(ci)
         for mname, fn in ci.methods.items():
             if mname == "__init__":
                 continue
             if mname.startswith("__") and mname.endswith("__"):
-                self.emit("/* %s.%s: dunder not lowered in this pass */"
-                          % (ci.name, mname))
-                self.emit()
-                continue
+                if mname not in ("__enter__", "__exit__"):
+                    self.emit("/* %s.%s: dunder not lowered in this pass */"
+                              % (ci.name, mname))
+                    self.emit()
+                    continue
             self.emit_method(ci, fn, virtual=(mname in VTABLE_METHODS))
         self.emit_vtable(ci)
         self.cur_class = prev
@@ -3225,7 +3284,12 @@ class Transpiler:
             # a default that names a sibling class attr resolves to that
             # sibling's own default value, not a (nonexistent) bare local.
             dflt = self._resolve_class_default(ci, nm)
-            self.emit("self->%s = %s;" % (cname(nm), self.wrap_obj(dflt)))
+            ft = ci.field_ctype(nm)
+            if ft and ft != OBJ:
+                self.emit("self->%s = %s;" % (
+                    cname(nm), self.coerce_to(ft, dflt, self.expr(dflt))))
+            else:
+                self.emit("self->%s = %s;" % (cname(nm), self.wrap_obj(dflt)))
         self.cur_class = prev
 
     def emit_class_static_instance_init(self, ci):
@@ -3284,6 +3348,19 @@ class Transpiler:
         self.emit("}")
         self.emit()
 
+    def emit_default_constructor(self, ci):
+        """Classes with no __init__ still need a _new for ctor calls."""
+        self.emit("%s* %s_new(void) {" % (ci.csym, ci.csym))
+        self.indent += 1
+        self.emit("%s* self = aalloc(sizeof *self);" % ci.csym)
+        self.emit("((Obj*)self)->type = &%s_type;" % ci.csym)
+        self.emit_class_attr_init(ci)
+        self.emit_class_static_instance_init(ci)
+        self.emit("return self;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
     def emit_inherited_constructor(self, ci, owner, fn):
         """A concrete class with no own __init__ still needs its own _new so it
         sets its own type pointer and its own class-attr values; it delegates
@@ -3322,9 +3399,10 @@ class Transpiler:
             self.emit("%s %s_%s(%s) {" % (ret, ci.csym, fn.name, plist))
             self.indent += 1
         elif virtual:
+            vparams = self._vtable_c_param_list(fn)
             self.emit("%s %s_%s(Obj* self_%s) {" % (
                 ret, ci.csym, fn.name,
-                (", " + ", ".join(params)) if params else ""))
+                (", " + ", ".join(vparams)) if vparams else ""))
             self.indent += 1
             self.emit("%s* self = (%s*)self_;" % (ci.csym, ci.csym))
             self.emit("(void)self;")
@@ -3333,6 +3411,8 @@ class Transpiler:
             self.emit("%s %s_%s(%s) {" % (ret, ci.csym, fn.name,
                                           ", ".join(plist)))
             self.indent += 1
+        if not (virtual and (fn.args.vararg or fn.args.kwarg)):
+            self._emit_vararg_setup(fn)
         self.emit_hoisted_body(fn.body)
         self.indent -= 1
         self.emit("}")
@@ -3774,6 +3854,13 @@ class Transpiler:
     def st_Assign(self, node):
         return self.assign(node)
 
+    def _subscript_container_is_obj(self, node):
+        if self.is_obj_word(node) or self.value_ctype(node) == OBJ:
+            return True
+        if isinstance(node, (ast.Call, ast.Attribute, ast.Subscript)):
+            return True
+        return False
+
     def assign(self, node, toplevel=False):
         rhs = self.expr(node.value)
         lines = []
@@ -3799,9 +3886,7 @@ class Transpiler:
                         lines.append("subscript_set(%s, %s, %s);" % (
                             self.expr(el.value), self.wrap_obj(el.slice), src))
                     elif isinstance(el, ast.Attribute):
-                        t = self.target_ctype(el) or OBJ
-                        lines.append("%s = %s;" % (self.expr(el),
-                                                   self.unwrap_obj(t, src)))
+                        lines.append(self._emit_attr_assign(el, node.value))
                     else:
                         t = self.target_ctype(el) or OBJ
                         lines.append("%s = %s;" % (self.expr(el),
@@ -3827,8 +3912,7 @@ class Transpiler:
                     lines.append("list_set_slice(%s, %s, %s, %s);" % (
                         self.expr(tgt.value), lo, hi, self.wrap_obj(node.value)))
                     continue
-                if self.is_obj_word(tgt.value) or \
-                        self.value_ctype(tgt.value) == OBJ or \
+                if self._subscript_container_is_obj(tgt.value) or \
                         isinstance(tgt.value, ast.Call):
                     lines.append("subscript_set(%s, %s, %s);" % (
                         self.expr(tgt.value), self.wrap_obj(tgt.slice),
@@ -3850,21 +3934,63 @@ class Transpiler:
                         self.coerce_to(self.scope[tgt.id], node.value, rhs)))
                     continue
                 # the value's actual C type wins over the name guess
-                ctype = self.value_ctype(node.value) or \
-                    infer_from_name(tgt.id) or OBJ
+                vct = self.value_ctype(node.value)
+                ctype = vct or infer_from_name(tgt.id) or OBJ
+                if vct == OBJ and infer_from_name(tgt.id) in ("char*", "int", "bool"):
+                    ctype = OBJ
                 if not toplevel:
                     self.scope[tgt.id] = ctype
                 lines.append("%s %s = %s;" % (ctype, cname(tgt.id), rhs))
             else:
-                lines.append("%s = %s;" % (
-                    self.expr(tgt),
-                    self.coerce_to(self.target_ctype(tgt), node.value, rhs)))
+                if isinstance(tgt, ast.Attribute):
+                    lines.append(self._emit_attr_assign(tgt, node.value))
+                else:
+                    lines.append("%s = %s;" % (
+                        self.expr(tgt),
+                        self.coerce_to(self.target_ctype(tgt), node.value, rhs)))
         return lines
 
     def wrap_for_assign(self, value_node, rendered):
         if self.value_ctype(value_node) in ("int", "bool", "char*"):
             return self.wrap_obj(value_node)
         return rendered
+
+    def _attr_assign_needs_setattr(self, tgt):
+        """Attribute store that cannot lower to a struct field offset."""
+        if not isinstance(tgt, ast.Attribute):
+            return False
+        if isinstance(tgt.value, ast.Name) and tgt.value.id == "self" \
+                and self.cur_class:
+            if self.cur_class.field_ctype(tgt.attr) is not None:
+                return False
+        bt = self.value_ctype(tgt.value)
+        if bt and bt.endswith("*") and bt != OBJ:
+            if self._class_has_field(bt[:-1], tgt.attr):
+                return False
+        if self.is_obj_word(tgt.value) or bt == OBJ or \
+                isinstance(tgt.value, ast.Call):
+            return True
+        return False
+
+    def _attr_is_property(self, tgt):
+        if not isinstance(tgt, ast.Attribute):
+            return False
+        bt = self.value_ctype(tgt.value)
+        if not (bt and bt.endswith("*") and bt != OBJ):
+            return False
+        cls = bt[:-1]
+        ci = self.classes.get(cls) or \
+            (self.xclasses[cls][0] if cls in self.xclasses else None)
+        return ci is not None and tgt.attr in ci.property_methods
+
+    def _emit_attr_assign(self, tgt, value_node):
+        val = self.wrap_obj(value_node)
+        if self._attr_is_property(tgt) or self._attr_assign_needs_setattr(tgt):
+            return 'mp_call_import("builtins", "setattr", 3, %s, %s, %s);' % (
+                self.wrap_obj(tgt.value), c_string(tgt.attr), val)
+        t = self.target_ctype(tgt) or OBJ
+        raw = self.expr(value_node)
+        return "%s = %s;" % (self.expr(tgt), self.coerce_to(t, value_node, raw))
 
     def value_ctype(self, node):
         """Best-effort C type of an expression, when determinable."""
@@ -3933,7 +4059,11 @@ class Transpiler:
                     return "bool"
                 if f.id in ("any", "all"):
                     return "bool"
-                if f.id in ("str", "chr", "repr"):
+                if f.id in ("chr", "repr"):
+                    return "char*"
+                if f.id == "str":
+                    if self.stdlib_root and len(node.args) != 1:
+                        return OBJ
                     return "char*"
                 if f.id == "getattr" and len(node.args) >= 2 and \
                         isinstance(node.args[1], ast.Constant) and \
@@ -4097,7 +4227,8 @@ class Transpiler:
         # since `subscript(...)` is an rvalue and cannot be assigned to.
         if isinstance(node.target, ast.Subscript) and \
                 (self.is_obj_word(node.target.value) or
-                 self.value_ctype(node.target.value) == OBJ):
+                 self.value_ctype(node.target.value) == OBJ or
+                 isinstance(node.target.value, ast.Call)):
             cont = self.expr(node.target.value)
             idx = self.wrap_obj(node.target.slice)
             ch = self.AUG_OP_CHAR.get(type(node.op), '+')
@@ -4375,13 +4506,8 @@ class Transpiler:
         for it in node.items:
             tv = it.optional_vars
             if isinstance(tv, ast.Name):
-                if tv.id in self.scope or tv.id in self.hoisted:
-                    binds.append("%s = %s;" % (cname(tv.id),
-                                               self.wrap_obj(it.context_expr)))
-                else:
-                    self.scope[tv.id] = OBJ
-                    binds.append("obj %s = %s;" % (
-                        cname(tv.id), self.expr(it.context_expr)))
+                binds.append("obj %s = %s;" % (
+                    cname(tv.id), self.expr(it.context_expr)))
             else:
                 binds.append("%s;" % self.expr(it.context_expr))
         lines += self.indent_lines(binds)
@@ -4448,13 +4574,45 @@ class Transpiler:
                 if kind == "func" and self.stdlib_root:
                     return "mp_call_import(%s, %s, 0)" % (
                         c_string(mod), c_string(node.id))
+            if self.stdlib_root:
+                return "mp_call_import(%s, %s, 0)" % (
+                    c_string(mod), c_string(node.id))
         if self.stdlib_root and node.id in STDLIB_BUILTINS and \
                 node.id not in self.scope:
             return "mp_call_import(\"builtins\", %s, 0)" % c_string(node.id)
+        if self.stdlib_root and node.id in self.import_alias and \
+                node.id not in self.scope:
+            return "mp_call_import(%s, %s, 0)" % (
+                c_string(self.import_alias[node.id]), c_string(""))
+        if node.id == "self" and node.id not in self.scope:
+            return "self"
         if node.id not in self.scope and self.star_import_mods and \
                 self.stdlib_root and node.id not in self.from_imports:
             mod = self.star_import_mods[-1]
             return "mp_call_import(%s, %s, 0)" % (c_string(mod), c_string(node.id))
+        if self.stdlib_root and node.id not in self.scope:
+            for mod in set(self.from_imports.values()) | \
+                    set(self.import_alias.values()) | \
+                    set(self.star_import_mods):
+                reg = self.load_xmod(mod)
+                if not reg:
+                    continue
+                if node.id in reg.get("globals", {}) or \
+                        node.id in reg.get("consts", {}):
+                    return "mp_call_import(%s, %s, 0)" % (
+                        c_string(mod), c_string(node.id))
+            for _cls, (_ci, mod) in self.xclasses.items():
+                reg = self.load_xmod(mod)
+                if reg and node.id in reg.get("globals", {}):
+                    return "mp_call_import(%s, %s, 0)" % (
+                        c_string(mod), c_string(node.id))
+            if node.id.isupper():
+                for mod in set(self.import_alias.values()):
+                    return "mp_getattr(mp_call_import(%s, %s, 0), %s, OBJ_NONE)" % (
+                        c_string(mod), c_string(""), c_string(node.id))
+            for mod in reversed(self.star_import_mods):
+                return "mp_call_import(%s, %s, 0)" % (
+                    c_string(mod), c_string(node.id))
         return cname(node.id)
 
     def const_literal(self, v):
@@ -4548,6 +4706,14 @@ class Transpiler:
             dflt = self._resolve_class_default(self.cur_class, node.attr)
             if dflt is not None:
                 return self.wrap_obj(dflt)
+        if node.attr == "buffer" and self.stdlib_root and \
+                (self.is_obj_word(node.value) or
+                 self.value_ctype(node.value) == OBJ):
+            return "mp_getattr(%s, %s, OBJ_NONE)" % (
+                self.wrap_obj(node.value), c_string(node.attr))
+        if isinstance(node.value, ast.Call) and self.stdlib_root:
+            return "mp_getattr(%s, %s, OBJ_NONE)" % (
+                self.expr(node.value), c_string(node.attr))
         if isinstance(node.value, ast.Name):
             base = node.value.id
             if base in self.import_alias:
@@ -4578,6 +4744,18 @@ class Transpiler:
                     owner = self.static_owner(self.cur_class, node.attr)
                     if owner:
                         return "%s_%s" % (owner.csym, cname(node.attr))
+                    if node.attr in self.cur_class.methods:
+                        ff = [f for f, _ in self.cur_class.full_fields()]
+                        if node.attr not in ff:
+                            if node.attr in self.cur_class.property_methods or \
+                                    node.attr not in VTABLE_METHODS:
+                                return "%s_%s(self)" % (self.cur_class.csym,
+                                                        node.attr)
+                            if self.stdlib_root:
+                                return "mp_getattr(%s, %s, OBJ_NONE)" % (
+                                    "OBJ_OBJ(self)", c_string(node.attr))
+                            return self.vcall(ast.Name(id="self", ctx=node.ctx),
+                                              node.attr, [])
                     return "self->%s" % cname(node.attr)
                 # cur_class is None (e.g. a lifted nested function): `self` is a
                 # typed param, so fall through to the concrete-pointer path.
@@ -4689,8 +4867,14 @@ class Transpiler:
                 ci = None
             if ci is not None:
                 nargs = [self.wrap_obj(a) for a in node.args]
-                return "OBJ_OBJ(%s_new(%s))" % (ci.csym, ", ".join(nargs) if nargs
-                                                 else "OBJ_NONE")
+                if nargs:
+                    return "OBJ_OBJ(%s_new(%s))" % (ci.csym, ", ".join(nargs))
+                init = ci.methods.get("__init__")
+                nparams = len(init.args.args) - 1 if init else 0
+                if nparams or (init and init.args.kwarg):
+                    cargs = self._pad_ctor_kwargs(init, [])
+                    return "OBJ_OBJ(%s_new(%s))" % (ci.csym, ", ".join(cargs))
+                return "OBJ_OBJ(%s_new())" % ci.csym
 
         if isinstance(func, ast.Call):
             inner = self.expr(func)
@@ -4722,8 +4906,11 @@ class Transpiler:
                     ("int", "bool") else "AS_INT(%s)" % self.wrap_obj(size)
                 return "float_to_bits(%s, %s)" % (
                     self.wrap_obj(node.args[0]), sz)
-            if fn == "str" and len(node.args) == 1:
-                return "pystr(%s)" % self.wrap_obj(node.args[0])
+            if fn == "str":
+                if len(node.args) == 1:
+                    return "pystr(%s)" % self.wrap_obj(node.args[0])
+                if self.stdlib_root and node.args:
+                    return self._mp_import_call("builtins", "str", node)
             if fn == "len" and len(node.args) == 1:
                 return "pylen(%s)" % self.wrap_obj(node.args[0])
             if fn == "print":
@@ -5119,16 +5306,12 @@ class Transpiler:
                         owner = ci
                     if owner is not None and func.attr in owner.methods:
                         m = owner.methods[func.attr]
-                        ret = self._c_ret(m)
                         if owner.name in self.xclasses and \
                                 owner.name not in self.classes:
-                            self.used_xmethods[(owner.name, func.attr)] = ret
-                        pct = [arg_ctype(m, a) for a in m.args.args[1:]]
-                        cargs = self.coerce_args(pct, node.args)
-                        return "%s_%s(%s%s)" % (
-                            owner.csym, func.attr,
-                            self._class_ptr_expr(func.value, owner.csym),
-                            (", " + ", ".join(cargs)) if cargs else "")
+                            self.used_xmethods[(owner.name, func.attr)] = \
+                                self._c_ret(m)
+                        return self._format_direct_method_call(
+                            owner, m, func.value, node.args)
             # non-virtual method on a concrete class pointer
             bt = self.value_ctype(func.value)
             if bt and bt.endswith("*") and bt != OBJ and bt[:-1] in self.classes:
@@ -5136,13 +5319,9 @@ class Transpiler:
                 owner = ci.find_method_owner(func.attr)
                 if owner:
                     m = owner.methods.get(func.attr)
-                    pct = [arg_ctype(m, a) for a in m.args.args[1:]] \
-                        if m else []
-                    cargs = self.coerce_args(pct, node.args)
-                    return "%s_%s(%s%s)" % (
-                        owner.csym, func.attr,
-                        self._class_ptr_expr(func.value, owner.csym),
-                        (", " + ", ".join(cargs)) if cargs else "")
+                    if m is not None:
+                        return self._format_direct_method_call(
+                            owner, m, func.value, node.args)
             # method on a concrete *imported* class pointer (e.g. narrowed by
             # isinstance). Safe to devirtualize only when the static class is a
             # leaf, so no subclass can override the method at runtime.
@@ -5200,6 +5379,22 @@ class Transpiler:
                 lo = self.coerce_to("int", node.args[0], self.expr(node.args[0]))
                 return "list_insert(%s, %s, %s)" % (
                     self.wrap_obj(func.value), lo, self.wrap_obj(node.args[1]))
+            if isinstance(func.value, ast.Name) and \
+                    func.value.id in self.from_imports:
+                sym = func.value.id
+                if func.attr == sym:
+                    kind, info = self.xref(sym, self.from_imports[sym])
+                    if kind == "class":
+                        init = info.methods.get("__init__")
+                        pct = [arg_ctype(init, a) for a in init.args.args[1:]] \
+                            if init else []
+                        defs = self.defaults_for(init, True) if init else None
+                        merged = self._merge_keyword_args(init, node.args,
+                                                          node.keywords, True) \
+                            if init and node.keywords else node.args
+                        cargs = self.coerce_args(pct, merged, defs)
+                        cargs = self._pad_ctor_kwargs(init, cargs)
+                        return "%s_new(%s)" % (info.csym, ", ".join(cargs))
             if self.stdlib_root:
                 return self._mp_method_call(func.value, func.attr, node)
             recv = self.expr(func.value)
@@ -5341,11 +5536,31 @@ class Transpiler:
         return bool(fndef.args.vararg or fndef.args.kwarg or
                     fndef.args.kwonlyargs)
 
+    def _format_direct_method_call(self, owner, m, recv_node, arg_nodes):
+        """Direct call to a concrete (non-vtable) class method."""
+        recv = self._class_ptr_expr(recv_node, owner.csym)
+        pct = [arg_ctype(m, a) for a in m.args.args[1:]]
+        n_named = len(pct)
+        if m.args.vararg and m.name not in VTABLE_METHODS:
+            extra = arg_nodes[n_named:]
+            wrapped = [self.coerce_to(OBJ, a, self.expr(a)) for a in extra]
+            parts = [recv]
+            if n_named:
+                parts.extend(self.coerce_args(pct, arg_nodes[:n_named]))
+            parts.append(str(len(wrapped)))
+            parts.extend(wrapped)
+            return "%s_%s(%s)" % (owner.csym, m.name, ", ".join(parts))
+        cargs = self.coerce_args(pct, arg_nodes)
+        return "%s_%s(%s%s)" % (
+            owner.csym, m.name, recv,
+            (", " + ", ".join(cargs)) if cargs else "")
+
     def vcall(self, recv_node, meth, arg_nodes):
         _, pct, fndef = self.method_proto(meth)
-        if self.stdlib_root and (self._method_has_varargs(fndef) or
-                                 len(arg_nodes) > len(pct)):
-            return self._mp_method_call_args(recv_node, meth, arg_nodes)
+        if self.stdlib_root:
+            return self._mp_method_call_args(recv_node, meth, arg_nodes, fndef)
+        if self._method_has_varargs(fndef) or len(arg_nodes) > len(pct):
+            return self._mp_method_call_args(recv_node, meth, arg_nodes, fndef)
         xo = self.vtable_recv(recv_node)
         defs = self.defaults_for(fndef, True) if fndef else None
         cargs = self.coerce_args(pct, arg_nodes, defs)
@@ -5421,12 +5636,9 @@ class Transpiler:
             if func.attr in VTABLE_METHODS:
                 return self.vcall(func.value, func.attr, node.args)
             m = owner.methods.get(func.attr)
-            pct = [arg_ctype(m, a) for a in m.args.args[1:]] if m else []
-            defs = self.defaults_for(m, True) if m else None
-            cargs = self.coerce_args(pct, node.args, defs)
-            return "%s_%s((%s*)(%s)%s)" % (
-                owner.csym, func.attr, owner.csym, self.expr(func.value),
-                (", " + ", ".join(cargs)) if cargs else "")
+            if m is not None:
+                return self._format_direct_method_call(
+                    owner, m, func.value, node.args)
         if cls in self.xclasses:
             ci, modname = self.xclasses[cls]
             owner = ci.find_method_owner(func.attr)
@@ -5439,12 +5651,11 @@ class Transpiler:
                 args = [self.expr(a) for a in node.args]
                 return "%s_%s(%s)" % (owner.csym, func.attr, ", ".join(args))
             m = owner.methods.get(func.attr)
-            ret = self._c_ret(m) if m else OBJ
-            self.used_xmethods[(owner.name, func.attr)] = ret
-            args = [self.expr(a) for a in node.args]  # devirtualized direct call
-            return "%s_%s((%s*)(%s)%s)" % (
-                owner.csym, func.attr, owner.csym, self.expr(func.value),
-                (", " + ", ".join(args)) if args else "")
+            if m is not None:
+                ret = self._c_ret(m)
+                self.used_xmethods[(owner.name, func.attr)] = ret
+                return self._format_direct_method_call(
+                    owner, m, func.value, node.args)
         return None
 
     BUILTIN_TYPE_TAGS = {"str": "T_STR", "bytes": "T_STR", "bytearray": "T_OBJ",
@@ -5576,7 +5787,10 @@ class Transpiler:
             return rendered
         if target == OBJ:
             return self.wrap_obj(value_node)
-        is_objval = vt == OBJ or self.is_obj_word(value_node)
+        is_objval = vt == OBJ or self.is_obj_word(value_node) or \
+            (isinstance(rendered, str) and rendered.startswith(
+                ("mp_call_", "mp_getattr", "mp_call_obj", "call_obj",
+                 "call_closure", "mp_call_method")))
         if target.endswith("*"):           # target is a (class) pointer
             if target == "char*":
                 if vt == "char*":
@@ -5596,9 +5810,18 @@ class Transpiler:
                 return "truthy(%s)" % rendered
             if target == "char*":
                 return "AS_STR(%s)" % rendered
+        if target == "bool" and vt in ("int", "bool"):
+            return "(%s != 0)" % rendered if vt == "int" else rendered
         return rendered
 
     def wrap_obj(self, node):
+        if isinstance(node, ast.IfExp):
+            bt = self.value_ctype(node.body)
+            ot = self.value_ctype(node.orelse)
+            be = self.expr(node.body)
+            oe = self.expr(node.orelse)
+            if bt != ot or be.startswith("mp_") or oe.startswith("mp_"):
+                return self.expr(node)
         if self.is_obj_word(node) or self.value_ctype(node) == OBJ:
             return self.expr(node)
         t = self.value_ctype(node)
@@ -5686,6 +5909,8 @@ class Transpiler:
         if isinstance(node, ast.Attribute):
             if node.attr == "__name__":      # type(x).__name__ -> TYPE(x)->name
                 return "char*"
+            if node.attr == "buffer" and self.stdlib_root:
+                return OBJ
             if isinstance(node.value, ast.Name):
                 bn = node.value.id
                 # class-static (obj global)
@@ -5757,6 +5982,10 @@ class Transpiler:
             return s
         if isinstance(node, ast.BoolOp):
             return self.truth_test(node, s)
+        if isinstance(node, ast.Call) and s.startswith(
+                ("mp_call_", "mp_getattr", "mp_call_obj", "call_obj",
+                 "call_closure", "mp_call_method")):
+            return "truthy(%s)" % s
         if self.is_obj_word(node) or \
                 (self.static_type(node) or self.value_ctype(node)) == OBJ:
             return "truthy(%s)" % s
@@ -6081,6 +6310,13 @@ class Transpiler:
     def ex_IfExp(self, node):
         bt = self.value_ctype(node.body)
         ot = self.value_ctype(node.orelse)
+        be = self.expr(node.body)
+        oe = self.expr(node.orelse)
+        if self.stdlib_root and (bt != ot or be.startswith("mp_") or
+                                 oe.startswith("mp_")):
+            return "(%s ? %s : %s)" % (self.bool_expr(node.test),
+                                       self.wrap_obj(node.body),
+                                       self.wrap_obj(node.orelse))
         if bt != ot:                        # unify to a common Tier-2 obj
             return "(%s ? %s : %s)" % (self.bool_expr(node.test),
                                        self.wrap_obj(node.body),
