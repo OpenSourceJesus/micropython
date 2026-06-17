@@ -38,7 +38,7 @@ $(BUILD)/objcore: $(OBJ)
 	$(Q)$(LD) $(LDFLAGS) -o $@ $^
 	$(Q)$(SIZE) $@
 
-.PHONY: all run translate install test test-transpile test-stdlib translate-stdlib
+.PHONY: all run translate install test test-transpile test-stdlib translate-stdlib libstdlib
 
 translate: $(SCRIPT_C)
 
@@ -52,6 +52,31 @@ test-stdlib:
 
 translate-stdlib:
 	$(Q)python3 translate_stdlib.py
+
+# Shared library: all transpiled python-stdlib C sources + MicroPython bridge/core.
+STDLIB_DIR = stdlib_translated
+STDLIB_SO = $(BUILD)/libmpstdlib.so
+STDLIB_SO_DIR = $(BUILD)/stdlib_so
+STDLIB_SO_CFLAGS = -std=c99 -fPIC -Os -DNDEBUG -Wall \
+	-I. -I$(TOP) -I$(BUILD) -I$(BUILD)/genhdr -I$(STDLIB_DIR)
+STDLIB_SRC = $(wildcard $(STDLIB_DIR)/*.c)
+STDLIB_OBJ = $(addprefix $(STDLIB_SO_DIR)/,$(notdir $(STDLIB_SRC:.c=.o)))
+
+libstdlib: $(STDLIB_SO)
+
+$(STDLIB_SO_DIR)/mp_stdlib_bridge.o: $(STDLIB_DIR)/mp_stdlib_bridge.c mpconfigstdlib.h | $(BUILD)/genhdr/qstrdefs.generated.h
+	$(ECHO) "CC $<"
+	$(Q)mkdir -p $(STDLIB_SO_DIR)
+	$(Q)$(CC) $(STDLIB_SO_CFLAGS) -c $< -o $@
+
+$(STDLIB_SO_DIR)/%.o: $(STDLIB_DIR)/%.c | $(BUILD)/genhdr/qstrdefs.generated.h
+	$(ECHO) "CC $<"
+	$(Q)mkdir -p $(STDLIB_SO_DIR)
+	$(Q)$(CC) $(STDLIB_SO_CFLAGS) -c $< -o $@
+
+$(STDLIB_SO): $(STDLIB_OBJ) | $(BUILD)/genhdr/qstrdefs.generated.h
+	$(ECHO) "LINK $@"
+	$(Q)$(CC) -shared -o $@ $(STDLIB_OBJ) $(PY_CORE_O) -lm
 
 install: $(BUILD)/objcore
 	$(Q)mkdir -p $(TOP)/build
