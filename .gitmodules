@@ -80,3 +80,6 @@
 [submodule "lib/CMSIS_6"]
 	path = lib/CMSIS_6
 	url = https://github.com/ARM-software/CMSIS_6.git
+[submodule "lib/C-ML"]
+	path = lib/C-ML
+	url = https://github.com/OpenSourceJesus/C-ML.git
