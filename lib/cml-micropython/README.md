@@ -98,3 +98,24 @@ because of BLAS/OpenMP initialisation; the native module calls them directly fro
 
 On Linux the unix port links with `-Wl,-export-dynamic` when `MICROPY_PY_FFI=1`
 so statically linked C-ML symbols are visible to `ffi.open(None)`.
+
+### ctypes
+
+The `ctypes` package provides a subset of CPython's ctypes API on top of `ffi`
+and `uctypes`:
+
+```python
+import ctypes
+from ctypes import CDLL, Structure, c_int, c_void_p, CFUNCTYPE
+
+class Point(ctypes.Structure):
+    _fields_ = [("x", c_int), ("y", c_int)]
+
+libc = ctypes.CDLL(None)
+libc.getpid.argtypes = []
+libc.getpid.restype = c_int
+```
+
+```bash
+./build-cml/micropython ../../tests/cml/ctypes_basic.py
+```
