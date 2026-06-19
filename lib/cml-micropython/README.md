@@ -77,3 +77,24 @@ cml.cleanup()
 ```bash
 make USER_C_MODULES=../../lib/cml-micropython/micropython.cmake
 ```
+
+## FFI support
+
+The `cml` variant enables MicroPython's built-in `ffi` module (requires system
+`libffi-dev`). Dynamic C bindings are available via:
+
+- `import ffi` — low-level libffi wrapper (`ffi.open`, `ffi.func`, `ffi.callback`)
+- `import ffilib` — helper for opening `libc` and other shared libraries
+- `import cffi` — subset of CPython's `cffi` API built on `ffi` (`FFI.cdef`, `FFI.new`, `FFI.dlopen`)
+- `import cml_ffi` — read-only C-ML symbol bindings via `ffi.open(None)`
+
+```bash
+./build-cml/micropython ../../tests/cml/ffi_basic.py
+```
+
+Use the native `cml` module for `init()` / tensor operations. Some C-ML entry
+points (notably `cml_init` / `torch_init`) are not safe to call through libffi
+because of BLAS/OpenMP initialisation; the native module calls them directly from C.
+
+On Linux the unix port links with `-Wl,-export-dynamic` when `MICROPY_PY_FFI=1`
+so statically linked C-ML symbols are visible to `ffi.open(None)`.

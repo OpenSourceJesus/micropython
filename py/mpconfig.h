@@ -2148,6 +2148,12 @@ typedef time_t mp_timestamp_t;
 #define MICROPY_PY_LWIP_SOCK_RAW (MICROPY_PY_LWIP)
 #endif
 
+// Whether to provide the "ffi" module for calling C functions via libffi
+// (Unix port only; requires libffi at build time).
+#ifndef MICROPY_PY_FFI
+#define MICROPY_PY_FFI (0)
+#endif
+
 #ifndef MICROPY_PY_SSL
 #define MICROPY_PY_SSL (0)
 #endif

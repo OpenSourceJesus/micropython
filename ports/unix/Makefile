@@ -187,6 +187,7 @@ endif
 
 ifeq ($(UNAME_S),Linux)
 LIBFFI_LDFLAGS += -ldl
+LDFLAGS += -Wl,-export-dynamic
 endif
 
 CFLAGS += $(LIBFFI_CFLAGS) -DMICROPY_PY_FFI=1
