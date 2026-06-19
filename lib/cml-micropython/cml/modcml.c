@@ -2,11 +2,20 @@
 
 #include <stdlib.h>
 
+static void cml_disable_openmp(void) {
+    // Embedded MicroPython: avoid MKL/OpenMP thread pools (segfault in nn_sequential).
+    setenv("MKL_THREADING_LAYER", "SEQUENTIAL", 1);
+    setenv("MKL_DYNAMIC", "FALSE", 1);
+    setenv("OMP_NUM_THREADS", "1", 1);
+    setenv("MKL_NUM_THREADS", "1", 1);
+    setenv("OPENBLAS_NUM_THREADS", "1", 1);
+    setenv("BLIS_NUM_THREADS", "1", 1);
+}
+
 static mp_obj_t cml_init_fn(void) {
     if (!cml_ready) {
         setenv("CUDA_VISIBLE_DEVICES", "", 1);
-        setenv("OMP_NUM_THREADS", "1", 1);
-        setenv("MKL_NUM_THREADS", "1", 1);
+        cml_disable_openmp();
         if (torch_init() != 0) {
             mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("torch_init failed"));
         }

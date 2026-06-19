@@ -12,6 +12,8 @@ make VARIANT=cml
 
 The build compiles a minimal CPU-only C-ML static library from `lib/C-ML` (git submodule), falling back to `~/C-ML` if absent.
 
+OpenMP is disabled at runtime (`MKL_THREADING_LAYER=SEQUENTIAL`, single-thread BLAS) for embedded stability.
+
 ```bash
 make VARIANT=cml CML_DIR=/path/to/C-ML
 ```
