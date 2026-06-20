@@ -9,6 +9,7 @@ NUMERIC="${ROOT}/lib/numeric-modules"
 UNIX="${ROOT}/ports/unix"
 MPY="${UNIX}/build-ml/micropython"
 TEST="${ROOT}/tests/ml/integration.py"
+MPL_TEST="${ROOT}/tests/ml/matplotlib_integration.py"
 
 mkdir -p "${NUMERIC}"
 ln -sfn ../../micropython-ulab/code "${NUMERIC}/ulab"
@@ -23,5 +24,7 @@ make -C "${UNIX}" VARIANT=ml submodules
 make -C "${UNIX}" VARIANT=ml "$@"
 
 if [[ "${1:-}" != "clean" ]]; then
+    cd "${ROOT}"
     "${MPY}" "${TEST}"
+    "${MPY}" "${MPL_TEST}"
 fi

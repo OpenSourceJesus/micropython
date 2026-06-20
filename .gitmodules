@@ -89,3 +89,6 @@
 [submodule "scipy"]
 	path = scipy
 	url = https://github.com/OpenSourceJesus/scipy.git
+[submodule "matplotlib"]
+	path = matplotlib
+	url = https://github.com/OpenSourceJesus/matplotlib.git

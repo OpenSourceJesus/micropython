@@ -1,12 +1,13 @@
-# Numeric modules (ulab + scipy + torch_c)
+# Numeric modules (ulab + scipy + torch_c + matplotlib)
 
-This directory bundles **micropython-ulab** (NumPy-like arrays + embedded SciPy subset) with **C-ML** (`import cml` / `import torch`, torch_c-compatible API) for a single `USER_C_MODULES` path.
+This directory bundles **micropython-ulab** (NumPy-like arrays + embedded SciPy subset) with **C-ML** (`import cml` / `import torch`, torch_c-compatible API) and a frozen **matplotlib** pyplot subset for a single `USER_C_MODULES` path plus training plots.
 
 Git submodules (fetched automatically by the build script):
 
 - `micropython-ulab` — https://github.com/OpenSourceJesus/micropython-ulab
 - `lib/C-ML` — https://github.com/OpenSourceJesus/C-ML
 - `scipy` — https://github.com/OpenSourceJesus/scipy (upstream reference; runtime SciPy is `from ulab import scipy`)
+- `matplotlib` — https://github.com/OpenSourceJesus/matplotlib (upstream reference; runtime plotting is `import matplotlib.pyplot`)
 
 Symlinks expose both build trees under one `USER_C_MODULES` root (required by the Make build):
 
@@ -22,8 +23,11 @@ cml/  -> ../cml-micropython/cml
 | `from ulab import numpy` | NumPy-like `ndarray` |
 | `from ulab import scipy` | SciPy subset (integrate, linalg, optimize, signal, special) |
 | `import cml` / `import torch` | torch_c tensors, autograd, nn |
+| `import matplotlib.pyplot` | SVG line plots (see `lib/matplotlib-micropython`) |
 
 The top-level `scipy/` directory in the repo root is **upstream CPython SciPy** (reference only). On MicroPython, use `from ulab import scipy`.
+
+The top-level `matplotlib/` directory is **upstream CPython Matplotlib** (reference only). On MicroPython, use `import matplotlib.pyplot as plt` from the frozen package in `lib/matplotlib-micropython`.
 
 ## Build (unix)
 
@@ -42,6 +46,7 @@ ln -sfn ../cml-micropython/cml "$REPO/lib/numeric-modules/cml"
 make -C "$REPO/ports/unix" VARIANT=ml submodules
 make -C "$REPO/ports/unix" VARIANT=ml
 "$REPO/ports/unix/build-ml/micropython" "$REPO/tests/ml/integration.py"
+"$REPO/ports/unix/build-ml/micropython" "$REPO/tests/ml/matplotlib_integration.py"
 ```
 
 Individual stacks:

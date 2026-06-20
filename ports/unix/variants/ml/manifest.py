@@ -7,3 +7,6 @@ package("cffi", base_path="$(MPY_DIR)/lib/cml-micropython")
 package("ctypes", base_path="$(MPY_DIR)/lib/cml-micropython")
 package("cml_ffi", base_path="$(MPY_DIR)/lib/cml-micropython")
 require("ffilib")
+
+# Pure-Python matplotlib/pyplot (SVG backend; upstream reference in matplotlib/ submodule)
+package("matplotlib", base_path="$(MPY_DIR)/lib/matplotlib-micropython")
