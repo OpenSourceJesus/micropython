@@ -32,12 +32,20 @@ add_custom_command(
     VERBATIM
 )
 
+set(CML_MOD_DIR "${CMAKE_CURRENT_LIST_DIR}/cml")
+
 add_library(usermod_cml INTERFACE)
 target_sources(usermod_cml INTERFACE
-    ${CMAKE_CURRENT_LIST_DIR}/cml/modcml.c
+    ${CML_MOD_DIR}/modcml.c
+    ${CML_MOD_DIR}/modcml_util.c
+    ${CML_MOD_DIR}/modcml_tensor.c
+    ${CML_MOD_DIR}/modcml_nn.c
+    ${CML_MOD_DIR}/modcml_autograd.c
+    ${CML_MOD_DIR}/modcml_optim.c
+    ${CML_MOD_DIR}/modcml_runtime.c
 )
 target_include_directories(usermod_cml INTERFACE
-    ${CMAKE_CURRENT_LIST_DIR}/cml
+    ${CML_MOD_DIR}
     ${CML_DIR}/include
 )
 target_compile_definitions(usermod_cml INTERFACE CML_STATIC_DEFINE)
@@ -46,3 +54,4 @@ target_link_libraries(usermod_cml INTERFACE
     m dl pthread
 )
 add_dependencies(usermod_cml "${CML_STATIC}")
+target_link_libraries(usermod INTERFACE usermod_cml)

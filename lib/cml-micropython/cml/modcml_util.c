@@ -1,5 +1,7 @@
 #include "modcml.h"
 
+#include "py/binary.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -341,6 +343,111 @@ static int cml_infer_ndim(mp_obj_t data) {
     return 0;
 }
 
+static size_t cml_buffer_itemsize(char typecode) {
+    switch (typecode) {
+        case 'b':
+        case 'B':
+        case '?':
+            return 1;
+        case 'h':
+        case 'H':
+            return 2;
+        case 'i':
+        case 'I':
+        case 'l':
+        case 'L':
+        case 'f':
+            return 4;
+        case 'q':
+        case 'Q':
+        case 'd':
+            return 8;
+        default:
+            return 0;
+    }
+}
+
+static Tensor *cml_tensor_from_buffer(mp_obj_t obj, bool *owns_out) {
+    mp_buffer_info_t bufinfo;
+    if (!mp_get_buffer(obj, &bufinfo, MP_BUFFER_READ)) {
+        return NULL;
+    }
+
+    mp_obj_t shape_obj = mp_load_attr(obj, MP_QSTR_shape);
+    int shape[CML_MAX_NDIM];
+    int ndim = cml_parse_shape(shape_obj, shape, CML_MAX_NDIM);
+
+    size_t itemsize = cml_buffer_itemsize(bufinfo.typecode);
+    if (itemsize == 0) {
+        mp_raise_TypeError(MP_ERROR_TEXT("unsupported buffer dtype"));
+    }
+
+    size_t numel = 1;
+    for (int i = 0; i < ndim; ++i) {
+        numel *= (size_t)shape[i];
+    }
+    if (bufinfo.len != numel * itemsize) {
+        mp_raise_ValueError(MP_ERROR_TEXT("buffer size mismatch"));
+    }
+
+    float *data = m_new(float, numel);
+    if (bufinfo.typecode == 'f') {
+        memcpy(data, bufinfo.buf, numel * sizeof(float));
+    } else if (bufinfo.typecode == 'd') {
+        const double *src = (const double *)bufinfo.buf;
+        for (size_t i = 0; i < numel; ++i) {
+            data[i] = (float)src[i];
+        }
+    } else {
+        const uint8_t *src = (const uint8_t *)bufinfo.buf;
+        for (size_t i = 0; i < numel; ++i) {
+            switch (bufinfo.typecode) {
+                case 'b':
+                    data[i] = (float)((const int8_t *)src)[i];
+                    break;
+                case 'B':
+                    data[i] = (float)src[i];
+                    break;
+                case 'h':
+                    data[i] = (float)((const int16_t *)src)[i];
+                    break;
+                case 'H':
+                    data[i] = (float)((const uint16_t *)src)[i];
+                    break;
+                case 'i':
+                case 'l':
+                    data[i] = (float)((const int32_t *)src)[i];
+                    break;
+                case 'I':
+                case 'L':
+                    data[i] = (float)((const uint32_t *)src)[i];
+                    break;
+                case 'q':
+                    data[i] = (float)((const int64_t *)src)[i];
+                    break;
+                case 'Q':
+                    data[i] = (float)((const uint64_t *)src)[i];
+                    break;
+                default:
+                    m_del(float, data, numel);
+                    mp_raise_TypeError(MP_ERROR_TEXT("unsupported buffer dtype"));
+            }
+        }
+    }
+
+    TorchTensorOptions opts = cml_default_options();
+    Tensor *tensor = torch_from_blob(data, shape, ndim, &opts);
+    if (tensor == NULL) {
+        m_del(float, data, numel);
+        cml_raise_if_error();
+        mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("tensor creation failed"));
+    }
+    if (owns_out) {
+        *owns_out = true;
+    }
+    return tensor;
+}
+
 Tensor *cml_tensor_from_mp(mp_obj_t obj, bool *owns_out) {
     cml_require_init();
     if (cml_is_tensor(obj)) {
@@ -350,8 +457,13 @@ Tensor *cml_tensor_from_mp(mp_obj_t obj, bool *owns_out) {
         return cml_as_tensor(obj)->tensor;
     }
 
+    Tensor *from_buffer = cml_tensor_from_buffer(obj, owns_out);
+    if (from_buffer != NULL) {
+        return from_buffer;
+    }
+
     if (!mp_obj_is_type(obj, &mp_type_list)) {
-        mp_raise_TypeError(MP_ERROR_TEXT("expected Tensor or list"));
+        mp_raise_TypeError(MP_ERROR_TEXT("expected Tensor, buffer, or list"));
     }
 
     int ndim = cml_infer_ndim(obj);

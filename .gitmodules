@@ -83,3 +83,9 @@
 [submodule "lib/C-ML"]
 	path = lib/C-ML
 	url = https://github.com/OpenSourceJesus/C-ML.git
+[submodule "micropython-ulab"]
+	path = micropython-ulab
+	url = https://github.com/OpenSourceJesus/micropython-ulab.git
+[submodule "scipy"]
+	path = scipy
+	url = https://github.com/OpenSourceJesus/scipy.git

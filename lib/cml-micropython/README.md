@@ -4,10 +4,18 @@ This directory wraps [C-ML](https://github.com/OpenSourceJesus/C-ML) `torch_c.h`
 
 ## Build
 
+From the **MicroPython repo root** (the directory containing `ports/`):
+
 ```bash
 cd ports/unix
 make VARIANT=cml
 ./build-cml/micropython ../../tests/cml/basic.py
+```
+
+For **ulab + scipy + torch_c** together, use the `ml` variant (see `lib/numeric-modules/README.md`):
+
+```bash
+/path/to/micropython/build-ml.sh
 ```
 
 The build compiles a minimal CPU-only C-ML static library from `lib/C-ML` (git submodule), falling back to `~/C-ML` if absent.
