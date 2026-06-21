@@ -4,11 +4,7 @@
 
 #define MICROPY_CONFIG_ROM_LEVEL            (MICROPY_CONFIG_ROM_LEVEL_MINIMUM)
 
-#define MICROPY_ENABLE_COMPILER             (0)
-#define MICROPY_HELPER_REPL                 (0)
-#define MICROPY_ENABLE_EXTERNAL_IMPORT      (0)
-#define MICROPY_MODULE_FROZEN_MPY           (0)
-#define MICROPY_PERSISTENT_CODE_LOAD        (0)
+#define MICROPY_ENABLE_INTERPRETER          (0)
 #define MICROPY_ENABLE_GC                   (1)
 
 // No sys module or import path.

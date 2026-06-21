@@ -1,5 +1,7 @@
 # build interpreter with "bigints" implemented as "longlong"
 
+include $(VARIANT_DIR)/../mpconfigvariant_common.mk
+
 # otherwise, small int is essentially 64-bit
 MICROPY_FORCE_32BIT := 1
 

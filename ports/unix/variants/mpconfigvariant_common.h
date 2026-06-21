@@ -79,6 +79,9 @@
 // Enable a small performance boost for the VM.
 #define MICROPY_OPT_COMPUTED_GOTO      (1)
 
+// GC-integrated arena allocator for faster bytes/tuple recycling.
+#define MICROPY_ENABLE_ARENA           (1)
+
 // Return number of collected objects from gc.collect().
 #define MICROPY_PY_GC_COLLECT_RETVAL   (1)
 
