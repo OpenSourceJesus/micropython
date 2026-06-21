@@ -2,7 +2,8 @@
 """Cross-implementation benchmark runner.
 
 Compiles/runs the shared benchmark sources (fib, pi, mandelbrot, intloop,
-primes) under six backends and reports wall-clock timings:
+primes, plus the numpy-style float-array kernels np_matmul / np_saxpy /
+np_ufuncs) under six backends and reports wall-clock timings:
 
   * micropython  -- the unix port interpreter (ports/unix/build-standard)
   * pypy         -- PyPy3 JIT
@@ -58,6 +59,10 @@ DEFAULT_SIZES = {
     "mandelbrot": 250,
     "intloop": 2500,
     "primes": 150_000,
+    # numpy-style float-array kernels (adapted from ShivyC's rpython2c/numpy).
+    "np_matmul": 160,      # NxN matrix multiply -> O(N^3)
+    "np_saxpy": 200_000,   # vector length; kernel repeated internally
+    "np_ufuncs": 4_000,    # sigmoid + L2 norm; repeated internally
 }
 BENCHMARKS = tuple(DEFAULT_SIZES)
 
@@ -161,7 +166,10 @@ def build_nuitka(name):
 def backends_for(name, arg):
     cmds = []
     if os.path.exists(MICROPYTHON):
-        cmds.append(("micropython", [MICROPYTHON, name + ".py"]))
+        # Bump the GC heap so the float-array benchmarks (which box every list
+        # element) do not exhaust MicroPython's small default heap.
+        cmds.append(("micropython",
+                     [MICROPYTHON, "-X", "heapsize=512M", name + ".py"]))
     else:
         print("  [micropython] %s not built; skipping" % MICROPYTHON)
     if shutil.which("pypy3"):
