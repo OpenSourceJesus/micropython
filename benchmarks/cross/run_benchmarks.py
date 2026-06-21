@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Cross-implementation benchmark runner.
 
-Compiles/runs the shared benchmark sources (fib.py, pi.py) under five backends
-and reports wall-clock timings:
+Compiles/runs the shared benchmark sources (fib, pi, mandelbrot, intloop,
+primes) under six backends and reports wall-clock timings:
 
   * micropython  -- the unix port interpreter (ports/unix/build-standard)
   * pypy         -- PyPy3 JIT
@@ -21,8 +21,12 @@ an integer (``int(sys.argv[1])``). That value is invisible to the compilers at
 build time, so none of them can constant-fold the work away. Under py2c that
 call lowers to ``atoi(argv[1])`` and ``main`` becomes ``int main(int, char**)``.
 
+If a ShivyC backend builds but computes the wrong answer (a silent miscompile),
+it is verified against a CPython reference, warned about, and dropped too.
+
 Usage:
-    python3 run_benchmarks.py [--fib N] [--pi N] [--repeats R] [--build-only]
+    python3 run_benchmarks.py [--<bench> N ...] [--repeats R] [--build-only]
+    # e.g. python3 run_benchmarks.py --fib 33 --primes 100000 --repeats 5
 """
 import argparse
 import os
@@ -47,7 +51,18 @@ NUITKA = shutil.which("nuitka") or os.path.expanduser("~/.local/bin/nuitka")
 SCRATCH = os.environ.get("CROSS_SCRATCH", "/tmp/cross_bench")
 os.environ.setdefault("NUITKA_CACHE_DIR", os.path.join(SCRATCH, "nuitka_cache"))
 
-BENCHMARKS = ("fib", "pi")
+# Each benchmark maps to a default workload size (the dynamic command-line N).
+DEFAULT_SIZES = {
+    "fib": 35,
+    "pi": 20_000_000,
+    "mandelbrot": 250,
+    "intloop": 2500,
+    "primes": 150_000,
+}
+BENCHMARKS = tuple(DEFAULT_SIZES)
+
+# Backends built/run by ShivyC; on a silent miscompile they are dropped + warned.
+SHIVYC_BACKENDS = ("rpython", "shivycx")
 
 
 def sh(cmd, **kw):
@@ -174,18 +189,43 @@ def time_cmd(cmd, repeats):
     return best, out
 
 
+def outputs_match(a, b):
+    """Equal as strings, or as floats within tolerance.
+
+    ShivyC's runtime prints floats with fewer significant digits (e.g.
+    `3.14159`) than CPython (`3.1415925...`), so a float benchmark must be
+    compared numerically, not byte-for-byte, to avoid false 'wrong answer'.
+    """
+    if a == b:
+        return True
+    try:
+        fa, fb = float(a), float(b)
+    except ValueError:
+        return False
+    return abs(fa - fb) <= 1e-5 * max(1.0, abs(fb))
+
+
+def reference_output(name, arg):
+    """Trusted result for this workload, computed with host CPython."""
+    p = subprocess.run([sys.executable, name + ".py", str(arg)],
+                       cwd=HERE, text=True, capture_output=True)
+    return p.stdout.strip()
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--fib", type=int, default=35, help="fib(N) workload size")
-    ap.add_argument("--pi", type=int, default=20_000_000,
-                    help="number of Leibniz terms")
+    ap = argparse.ArgumentParser(
+        description="Cross-implementation benchmark runner.")
+    for name, default in DEFAULT_SIZES.items():
+        ap.add_argument("--" + name, type=int, default=default,
+                        metavar="N", help="%s workload size (default %d)"
+                        % (name, default))
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--build-only", action="store_true")
     args = ap.parse_args()
 
     os.makedirs(BIN, exist_ok=True)
     os.makedirs(SCRATCH, exist_ok=True)
-    sizes = {"fib": args.fib, "pi": args.pi}
+    sizes = {name: getattr(args, name) for name in BENCHMARKS}
 
     for name in BENCHMARKS:
         arg = sizes[name]
@@ -193,16 +233,25 @@ def main():
         rows = backends_for(name, arg)
         if args.build_only:
             continue
+        ref = reference_output(name, arg)
         results = []
         for label, cmd in rows:
             best, out = time_cmd(cmd, args.repeats)
-            results.append((label, best, out))
-        baseline = next((b for l, b, _ in results if l == "micropython"), None)
+            ok = outputs_match(out, ref)
+            # A ShivyC backend that builds but computes the wrong answer is a
+            # silent miscompile: warn and drop it rather than report it.
+            if not ok and label in SHIVYC_BACKENDS:
+                warn_shivyc(label, "produced wrong output %r (expected %r)"
+                            % (out, ref))
+                continue
+            results.append((label, best, out, ok))
+        baseline = next((b for l, b, _, _ in results if l == "micropython"), None)
         results.sort(key=lambda r: r[1])
         print("  %-12s %12s %10s   %s" % ("backend", "best (s)", "speedup", "output"))
-        for label, best, out in results:
+        for label, best, out, ok in results:
             sp = ("%6.1fx" % (baseline / best)) if baseline else "   -  "
-            print("  %-12s %12.4f %10s   %s" % (label, best, sp, out))
+            flag = "" if ok else "  (!= reference)"
+            print("  %-12s %12.4f %10s   %s%s" % (label, best, sp, out, flag))
 
 
 if __name__ == "__main__":

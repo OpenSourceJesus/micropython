@@ -314,7 +314,7 @@ $(BUILD)/lib/libffi/include/ffi.h: $(TOP)/lib/libffi/configure
 PREFIX = /usr/local
 BINDIR = $(DESTDIR)$(PREFIX)/bin
 
-install: $(BUILD)/$(PROG)
+install: $(BUILD)/$(PROG) fetch-py2c
 	install -d $(BINDIR)
 	install $(BUILD)/$(PROG) $(BINDIR)/$(PROG)
 

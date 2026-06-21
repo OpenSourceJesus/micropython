@@ -91,7 +91,7 @@ $(STDLIB_SO): $(STDLIB_OBJ) $(STDLIB_SO_DIR)/mp_stdlib_bridge.o $(STDLIB_PY_O) |
 	$(ECHO) "LINK $@"
 	$(Q)$(CC) -shared -o $@ $(STDLIB_OBJ) $(STDLIB_SO_DIR)/mp_stdlib_bridge.o $(STDLIB_PY_O) -lm
 
-install: $(BUILD)/objcore
+install: $(BUILD)/objcore fetch-py2c
 	$(Q)mkdir -p $(TOP)/build
 	$(Q)cp $(BUILD)/objcore $(TOP)/build/objcore
 

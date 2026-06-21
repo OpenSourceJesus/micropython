@@ -56,6 +56,10 @@ endif
 all:
 .PHONY: all
 
+.PHONY: fetch-py2c
+fetch-py2c:
+	$(Q)$(PYTHON) $(TOP)/tools/fetch_py2c.py
+
 .DELETE_ON_ERROR:
 
 MKENV_INCLUDED = 1
