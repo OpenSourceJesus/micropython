@@ -1,0 +1,566 @@
+{
+  "fib": {
+    "arg": 35,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.0109,
+        "build": 1.627,
+        "output": "9227465",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.0299,
+        "build": 1.77,
+        "output": "9227465",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.04,
+        "build": 1.471,
+        "output": "9227465",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.0995,
+        "build": null,
+        "output": "9227465",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 0.524,
+        "build": 0.895,
+        "output": "9227465",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 1.3299,
+        "build": null,
+        "output": "9227465",
+        "ok": true
+      }
+    ]
+  },
+  "pi": {
+    "arg": 20000000,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.0211,
+        "build": 1.655,
+        "output": "3.14159",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.035,
+        "build": 1.46,
+        "output": "3.14159",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.0571,
+        "build": null,
+        "output": "3.141592603589817",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.0773,
+        "build": 1.788,
+        "output": "3.14159",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 1.1214,
+        "build": 0.903,
+        "output": "3.141592603589817",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 2.3297,
+        "build": null,
+        "output": "3.141592603589817",
+        "ok": true
+      }
+    ]
+  },
+  "mandelbrot": {
+    "arg": 250,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.003,
+        "build": 1.607,
+        "output": "1315986",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.0173,
+        "build": 1.469,
+        "output": "1315986",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.0179,
+        "build": 1.773,
+        "output": "1315986",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.0486,
+        "build": null,
+        "output": "1315986",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 0.1217,
+        "build": 0.913,
+        "output": "1315986",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 0.2908,
+        "build": null,
+        "output": "1315986",
+        "ok": true
+      }
+    ]
+  },
+  "intloop": {
+    "arg": 2500,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.0226,
+        "build": 1.645,
+        "output": "253938",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.024,
+        "build": 1.759,
+        "output": "253938",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.0428,
+        "build": 1.483,
+        "output": "253938",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.0625,
+        "build": null,
+        "output": "253938",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 0.2912,
+        "build": null,
+        "output": "253938",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 0.363,
+        "build": 0.879,
+        "output": "253938",
+        "ok": true
+      }
+    ]
+  },
+  "primes": {
+    "arg": 150000,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.0479,
+        "build": 1.642,
+        "output": "13848",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.0545,
+        "build": 1.665,
+        "output": "13848",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.0987,
+        "build": 1.501,
+        "output": "13848",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.1392,
+        "build": null,
+        "output": "13848",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 0.6457,
+        "build": 0.903,
+        "output": "13848",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 1.159,
+        "build": null,
+        "output": "13848",
+        "ok": true
+      }
+    ]
+  },
+  "np_matmul": {
+    "arg": 160,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.0038,
+        "build": 1.683,
+        "output": "153599",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.0163,
+        "build": 1.517,
+        "output": "153599",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.0359,
+        "build": 1.695,
+        "output": "153599",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.0478,
+        "build": null,
+        "output": "153599",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 0.2931,
+        "build": 0.926,
+        "output": "153599",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 0.3628,
+        "build": null,
+        "output": "153599",
+        "ok": true
+      }
+    ]
+  },
+  "np_saxpy": {
+    "arg": 200000,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.0361,
+        "build": 1.741,
+        "output": "981000",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.06,
+        "build": 1.506,
+        "output": "981000",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.0992,
+        "build": null,
+        "output": "981000",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.2419,
+        "build": 1.729,
+        "output": "981000",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 2.5728,
+        "build": 0.93,
+        "output": "981000",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 4.7202,
+        "build": null,
+        "output": "981000",
+        "ok": true
+      }
+    ]
+  },
+  "np_ufuncs": {
+    "arg": 4000,
+    "results": [
+      {
+        "backend": "codon",
+        "run": 0.0956,
+        "build": 1.559,
+        "output": "210797",
+        "ok": true
+      },
+      {
+        "backend": "rpython",
+        "run": 0.2876,
+        "build": 1.649,
+        "output": "210797",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.8671,
+        "build": null,
+        "output": "210797",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 1.522,
+        "build": 1.702,
+        "output": "210797",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 7.1216,
+        "build": 0.901,
+        "output": "210797",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 21.5168,
+        "build": null,
+        "output": "210797",
+        "ok": true
+      }
+    ]
+  },
+  "nbody": {
+    "arg": 20000,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.0246,
+        "build": 1.68,
+        "output": "8454.07",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.0346,
+        "build": 1.592,
+        "output": "8454.07",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.0748,
+        "build": null,
+        "output": "8454.074127335949",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.0964,
+        "build": 1.897,
+        "output": "8454.07",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 0.2895,
+        "build": 0.911,
+        "output": "8454.074127335949",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 14.869,
+        "build": null,
+        "output": "8454.074127335949",
+        "ok": true
+      }
+    ]
+  },
+  "nn_inference": {
+    "arg": 20000,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.0668,
+        "build": 1.661,
+        "output": "143322",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.0826,
+        "build": 1.655,
+        "output": "143322",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.1908,
+        "build": null,
+        "output": "143321.77171457416",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.3986,
+        "build": 1.759,
+        "output": "143322",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 2.9485,
+        "build": 0.901,
+        "output": "143321.77171457416",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 6.2892,
+        "build": null,
+        "output": "143321.77171457416",
+        "ok": true
+      }
+    ]
+  },
+  "nn_train": {
+    "arg": 30000,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.039,
+        "build": 1.846,
+        "output": "4.205e-05",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.0843,
+        "build": 1.656,
+        "output": "4.205e-05",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.1135,
+        "build": 3.117,
+        "output": "4.205e-05",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.14,
+        "build": null,
+        "output": "4.2049964189982504e-05",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 0.5156,
+        "build": 0.93,
+        "output": "4.2049964189982504e-05",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 1.4826,
+        "build": null,
+        "output": "4.2049964189982504e-05",
+        "ok": true
+      }
+    ]
+  },
+  "nn_quant": {
+    "arg": 300000,
+    "results": [
+      {
+        "backend": "rpython",
+        "run": 0.037,
+        "build": 1.659,
+        "output": "240000000",
+        "ok": true
+      },
+      {
+        "backend": "codon",
+        "run": 0.0966,
+        "build": 1.522,
+        "output": "240000000",
+        "ok": true
+      },
+      {
+        "backend": "shivycx",
+        "run": 0.1444,
+        "build": 1.754,
+        "output": "240000000",
+        "ok": true
+      },
+      {
+        "backend": "pypy",
+        "run": 0.2866,
+        "build": null,
+        "output": "240000000",
+        "ok": true
+      },
+      {
+        "backend": "nuitka",
+        "run": 6.4737,
+        "build": 0.907,
+        "output": "240000000",
+        "ok": true
+      },
+      {
+        "backend": "micropython",
+        "run": 8.2601,
+        "build": null,
+        "output": "240000000",
+        "ok": true
+      }
+    ]
+  }
+}
