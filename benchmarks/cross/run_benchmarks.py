@@ -2,8 +2,9 @@
 """Cross-implementation benchmark runner.
 
 Compiles/runs the shared benchmark sources (fib, pi, mandelbrot, intloop,
-primes, plus the numpy-style float-array kernels np_matmul / np_saxpy /
-np_ufuncs) under six backends and reports wall-clock timings:
+primes; the numpy-style float-array kernels np_matmul / np_saxpy / np_ufuncs;
+and the physics + neural-net kernels nbody / nn_inference / nn_train / nn_quant)
+under six backends and reports wall-clock timings:
 
   * micropython  -- the unix port interpreter (ports/unix/build-standard)
   * pypy         -- PyPy3 JIT
@@ -63,6 +64,11 @@ DEFAULT_SIZES = {
     "np_matmul": 160,      # NxN matrix multiply -> O(N^3)
     "np_saxpy": 200_000,   # vector length; kernel repeated internally
     "np_ufuncs": 4_000,    # sigmoid + L2 norm; repeated internally
+    # physics + neural-net kernels (adapted from rpython2c/nbody and rpython2c/nn).
+    "nbody": 20_000,       # gravity integration steps (5 bodies)
+    "nn_inference": 20_000,  # dense MLP forward-pass repetitions
+    "nn_train": 30_000,    # MLP training epochs (XOR)
+    "nn_quant": 300_000,   # 8-bit quantized MLP inference repetitions
 }
 BENCHMARKS = tuple(DEFAULT_SIZES)
 
