@@ -1,6 +1,6 @@
-# Interpreter toggle for variants that include mpconfigvariant_common.h.
-#   make                         # interpreter enabled (default)
-#   make INTERPRETER=0           # object-model only, no Python VM/REPL
+# Interpreter toggle for all unix variants.
+#   make                         # micropython + mpython executables (default)
+#   make INTERPRETER=0           # object-model only: libmicropython.a, no CLI
 #   make INTERPRETER=1           # explicit enable
 INTERPRETER ?= 1
 
@@ -15,4 +15,7 @@ ifneq ($(INTERPRETER),1)
 BUILD := $(BUILD)-nointerp
 # Frozen .mpy modules require the bytecode VM.
 FROZEN_MANIFEST :=
+# Object-model only: build a static library, not an executable.
+PROG :=
+all: $(BUILD)/libmicropython.a
 endif

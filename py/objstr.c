@@ -876,6 +876,34 @@ static mp_obj_t str_endswith(size_t n_args, const mp_obj_t *args) {
 }
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(str_endswith_obj, 2, 4, str_endswith);
 
+static mp_obj_t str_removeaffix(mp_obj_t self_in, mp_obj_t arg, bool remove_suffix) {
+    size_t str_len;
+    const char *str = mp_obj_str_get_data(self_in, &str_len);
+    size_t affix_len;
+    const char *affix = mp_obj_str_get_data(arg, &affix_len);
+    if (affix_len == 0 || str_len < affix_len) {
+        return self_in;
+    }
+    if (remove_suffix) {
+        if (memcmp(str + str_len - affix_len, affix, affix_len) == 0) {
+            return mp_obj_new_str(str, str_len - affix_len);
+        }
+    } else if (memcmp(str, affix, affix_len) == 0) {
+        return mp_obj_new_str(str + affix_len, str_len - affix_len);
+    }
+    return self_in;
+}
+
+static mp_obj_t str_removesuffix(mp_obj_t self_in, mp_obj_t arg) {
+    return str_removeaffix(self_in, arg, true);
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(str_removesuffix_obj, str_removesuffix);
+
+static mp_obj_t str_removeprefix(mp_obj_t self_in, mp_obj_t arg) {
+    return str_removeaffix(self_in, arg, false);
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(str_removeprefix_obj, str_removeprefix);
+
 enum { LSTRIP, RSTRIP, STRIP };
 
 static mp_obj_t str_uni_strip(int type, size_t n_args, const mp_obj_t *args) {
@@ -2119,6 +2147,8 @@ static const mp_rom_map_elem_t array_bytearray_str_bytes_locals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_rsplit), MP_ROM_PTR(&str_rsplit_obj) },
     { MP_ROM_QSTR(MP_QSTR_startswith), MP_ROM_PTR(&str_startswith_obj) },
     { MP_ROM_QSTR(MP_QSTR_endswith), MP_ROM_PTR(&str_endswith_obj) },
+    { MP_ROM_QSTR(MP_QSTR_removeprefix), MP_ROM_PTR(&str_removeprefix_obj) },
+    { MP_ROM_QSTR(MP_QSTR_removesuffix), MP_ROM_PTR(&str_removesuffix_obj) },
     { MP_ROM_QSTR(MP_QSTR_strip), MP_ROM_PTR(&str_strip_obj) },
     { MP_ROM_QSTR(MP_QSTR_lstrip), MP_ROM_PTR(&str_lstrip_obj) },
     { MP_ROM_QSTR(MP_QSTR_rstrip), MP_ROM_PTR(&str_rstrip_obj) },

@@ -55,11 +55,13 @@
 #define MICROPY_STREAMS_POSIX_API      (1)
 
 // REPL conveniences.
+#if MICROPY_ENABLE_INTERPRETER
 #define MICROPY_REPL_EMACS_WORDS_MOVE  (1)
 #define MICROPY_REPL_EMACS_EXTRA_WORDS_MOVE (1)
 #define MICROPY_USE_READLINE_HISTORY   (1)
 #ifndef MICROPY_READLINE_HISTORY_SIZE
 #define MICROPY_READLINE_HISTORY_SIZE  (50)
+#endif
 #endif
 
 // Seed random on import.
@@ -69,8 +71,16 @@
 #define MICROPY_ENABLE_EMERGENCY_EXCEPTION_BUF (1)
 #define MICROPY_EMERGENCY_EXCEPTION_BUF_SIZE (256)
 
+#if MICROPY_ENABLE_INTERPRETER
 // Allow loading of .mpy files.
 #define MICROPY_PERSISTENT_CODE_LOAD   (1)
+#ifndef MICROPY_PY_AST
+#define MICROPY_PY_AST                 (1)
+#endif
+#ifndef MICROPY_ENABLE_DOC_STRING
+#define MICROPY_ENABLE_DOC_STRING      (1)
+#endif
+#endif
 
 // Extra memory debugging.
 #define MICROPY_MALLOC_USES_ALLOCATED_SIZE (1)

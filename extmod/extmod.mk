@@ -624,3 +624,8 @@ $(addprefix $(BUILD)/, $(SRC_OPENAMP_C:.c=.o)): $(BUILD)/openamp/metal/config.h
 SRC_THIRDPARTY_C += $(SRC_OPENAMP_C) $(SRC_LIBMETAL_C:$(BUILD)/%=%)
 
 endif # MICROPY_PY_OPENAMP
+
+################################################################################
+# ast
+
+include $(TOP)/extmod/modast/modast.mk

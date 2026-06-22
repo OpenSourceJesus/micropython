@@ -1,5 +1,4 @@
 FROZEN_MANIFEST ?= $(VARIANT_DIR)/manifest.py
-include $(VARIANT_DIR)/../mpconfigvariant_common.mk
 USER_C_MODULES = $(TOP)/lib/numeric-modules
 
 GIT_SUBMODULES += micropython-ulab lib/C-ML scipy matplotlib

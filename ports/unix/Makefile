@@ -19,6 +19,7 @@ BUILD ?= build-$(VARIANT)
 include ../../py/mkenv.mk
 -include mpconfigport.mk
 include $(VARIANT_DIR)/mpconfigvariant.mk
+include variants/mpconfigvariant_common.mk
 
 # Use the default frozen manifest, variants may override this.
 FROZEN_MANIFEST ?= variants/manifest.py
@@ -233,6 +234,18 @@ OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(addprefix $(BUILD)/, $(SRC_CXX:.cpp=.o))
 OBJ += $(addprefix $(BUILD)/, $(SHARED_SRC_C:.c=.o))
 
+ifneq ($(INTERPRETER),1)
+# Object-model static library: omit the unix CLI/REPL and other interpreter-only objects.
+OBJ := $(filter-out \
+	$(BUILD)/main.o \
+	$(BUILD)/input.o \
+	$(BUILD)/shared/runtime/pyexec.o \
+	,$(OBJ))
+ifeq ($(MICROPY_USE_READLINE),1)
+OBJ := $(filter-out $(BUILD)/shared/readline/readline.o,$(OBJ))
+endif
+endif
+
 # List of sources for qstr extraction
 SRC_QSTR += $(SRC_C) $(SRC_CXX) $(SHARED_SRC_C)
 
@@ -259,6 +272,8 @@ include $(TOP)/py/mkrules.mk
 
 .PHONY: test test_full_no_native test_full test//% test/% test-failures print-failures clean-failures
 
+ifeq ($(INTERPRETER),1)
+
 test: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py
 	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py
 
@@ -267,12 +282,6 @@ test//%: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py
 
 test-failures: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py
 	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py --run-failures
-
-print-failures:
-	cd $(TOP)/tests && ./run-tests.py --print-failures
-
-clean-failures:
-	cd $(TOP)/tests && ./run-tests.py --clean-failures
 
 test/%: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py
 	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py -d "$*"
@@ -288,6 +297,22 @@ test_full: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py test_full_no_native
 test_gcov: test_full
 	gcov -o $(BUILD)/py $(TOP)/py/*.c
 	gcov -o $(BUILD)/extmod $(TOP)/extmod/*.c
+
+else
+
+test test-failures test_full_no_native test_full test_gcov:
+	$(error Tests require INTERPRETER=1)
+
+test//% test/%:
+	$(error Tests require INTERPRETER=1)
+
+endif
+
+print-failures:
+	cd $(TOP)/tests && ./run-tests.py --print-failures
+
+clean-failures:
+	cd $(TOP)/tests && ./run-tests.py --clean-failures
 
 # Value of configure's --host= option (required for cross-compilation).
 # Deduce it from CROSS_COMPILE by default, but can be overridden.
@@ -313,10 +338,32 @@ $(BUILD)/lib/libffi/include/ffi.h: $(TOP)/lib/libffi/configure
 
 PREFIX = /usr/local
 BINDIR = $(DESTDIR)$(PREFIX)/bin
+LIBDIR = $(DESTDIR)$(PREFIX)/lib
 
-install: $(BUILD)/$(PROG) fetch-py2c
+ifeq ($(INTERPRETER),1)
+$(BUILD)/mpython: $(BUILD)/$(PROG)
+	$(Q)ln -sf $(PROG) $@
+
+all: $(BUILD)/mpython
+
+.PHONY: py2c-smoke
+py2c-smoke: $(BUILD)/mpython
+	$(BUILD)/mpython -X heapsize=8m $(TOP)/tools/py2c.py --conventions
+
+install: $(BUILD)/$(PROG) $(BUILD)/mpython fetch-py2c
 	install -d $(BINDIR)
 	install $(BUILD)/$(PROG) $(BINDIR)/$(PROG)
+	install $(BUILD)/mpython $(BINDIR)/mpython
+else
+install: $(BUILD)/libmicropython.a
+	install -d $(LIBDIR)
+	install $(BUILD)/libmicropython.a $(LIBDIR)/
+endif
 
 uninstall:
+ifeq ($(INTERPRETER),1)
 	-rm $(BINDIR)/$(PROG)
+	-rm $(BINDIR)/mpython
+else
+	-rm $(LIBDIR)/libmicropython.a
+endif

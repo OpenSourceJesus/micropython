@@ -1,3 +1,8 @@
 add_library("unix-ffi", "$(MPY_LIB_DIR)/unix-ffi")
 require("mip-cmdline")
 require("ssl")
+require("pathlib")
+require("copy")
+require("os-path")
+module("ast.py", base_path="$(PORT_DIR)/lib")
+module("_ast_unparse.py", base_path="$(PORT_DIR)/lib")

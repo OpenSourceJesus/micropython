@@ -10,7 +10,6 @@ CFLAGS += \
 LDFLAGS += -fprofile-arcs -ftest-coverage
 
 FROZEN_MANIFEST ?= $(VARIANT_DIR)/manifest.py
-include $(VARIANT_DIR)/../mpconfigvariant_common.mk
 USER_C_MODULES = $(TOP)/examples/usercmodule
 
 SRC_C += coverage.c

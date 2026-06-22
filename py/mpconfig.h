@@ -408,7 +408,7 @@ typedef uint64_t mp_uint_t;
 
 // Whether to support loading of persistent code
 #ifndef MICROPY_PERSISTENT_CODE_LOAD
-#define MICROPY_PERSISTENT_CODE_LOAD (0)
+#define MICROPY_PERSISTENT_CODE_LOAD (MICROPY_ENABLE_INTERPRETER && 0)
 #endif
 
 // Whether to support loading of persistent native code
@@ -554,11 +554,20 @@ typedef uint64_t mp_uint_t;
 #define MICROPY_ENABLE_NATIVE_CODE (MICROPY_EMIT_NATIVE || MICROPY_PERSISTENT_CODE_LOAD_NATIVE)
 
 /*****************************************************************************/
+/* Interpreter configuration                                                 */
+
+// Whether to include the Python interpreter (compiler, VM, REPL, imports).
+// When disabled, only the object model and runtime are available for linking.
+#ifndef MICROPY_ENABLE_INTERPRETER
+#define MICROPY_ENABLE_INTERPRETER (1)
+#endif
+
+/*****************************************************************************/
 /* Compiler configuration                                                    */
 
 // Whether to include the compiler
 #ifndef MICROPY_ENABLE_COMPILER
-#define MICROPY_ENABLE_COMPILER (MICROPY_CONFIG_ROM_LEVEL_AT_LEAST_CORE_FEATURES)
+#define MICROPY_ENABLE_COMPILER (MICROPY_ENABLE_INTERPRETER && MICROPY_CONFIG_ROM_LEVEL_AT_LEAST_CORE_FEATURES)
 #endif
 
 // Whether the compiler is dynamically configurable (ie at runtime)
@@ -725,7 +734,7 @@ typedef uint64_t mp_uint_t;
 // When disabled, only importing of built-in modules is supported
 // When enabled, a port must implement mp_import_stat (among other things)
 #ifndef MICROPY_ENABLE_EXTERNAL_IMPORT
-#define MICROPY_ENABLE_EXTERNAL_IMPORT (MICROPY_CONFIG_ROM_LEVEL_AT_LEAST_CORE_FEATURES)
+#define MICROPY_ENABLE_EXTERNAL_IMPORT (MICROPY_ENABLE_INTERPRETER && MICROPY_CONFIG_ROM_LEVEL_AT_LEAST_CORE_FEATURES)
 #endif
 
 // Whether to use the POSIX reader for importing files
@@ -850,7 +859,7 @@ typedef uint64_t mp_uint_t;
 
 // Whether to include REPL helper function
 #ifndef MICROPY_HELPER_REPL
-#define MICROPY_HELPER_REPL (MICROPY_CONFIG_ROM_LEVEL_AT_LEAST_EXTRA_FEATURES)
+#define MICROPY_HELPER_REPL (MICROPY_ENABLE_INTERPRETER && MICROPY_CONFIG_ROM_LEVEL_AT_LEAST_EXTRA_FEATURES)
 #endif
 
 // Allow enabling debug prints after each REPL line
@@ -1984,6 +1993,10 @@ typedef time_t mp_timestamp_t;
 // Whether to support the "separators" argument to dump, dumps
 #ifndef MICROPY_PY_JSON_SEPARATORS
 #define MICROPY_PY_JSON_SEPARATORS (1)
+#endif
+
+#ifndef MICROPY_PY_AST
+#define MICROPY_PY_AST (0)
 #endif
 
 #ifndef MICROPY_PY_OS
